@@ -320,12 +320,15 @@ async function withTimeout<T>(
 ): Promise<T> {
   let timer: NodeJS.Timeout;
   const timeout = new Promise<never>((_, reject) => {
+    // Deliberately REF'D: against a dead proxy/endpoint hellojs can leave its
+    // promise unsettled while holding no ref'd handle, and an unref'd timer
+    // here let Node exit 0 with zero output before this wall clock fired. The
+    // timer is cleared in `finally`, so a settled request never lingers.
     timer = setTimeout(
       () =>
         reject(new Error(`hello transport timed out after ${ms}ms for ${url}`)),
       ms,
     );
-    timer.unref?.();
   });
   try {
     return await Promise.race([p, timeout]);

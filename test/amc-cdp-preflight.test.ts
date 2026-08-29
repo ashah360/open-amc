@@ -183,6 +183,41 @@ describe("CDP endpoint preflight", () => {
   });
 });
 
+describe("real child-process lifecycle with a dead proxy (hello transport)", () => {
+  it("exits nonzero with one JSON error line instead of a silent exit 0", async () => {
+    const port = await closedPort();
+    const tsx = path.join(ROOT, "node_modules", ".bin", "tsx");
+    const fixture = path.join(
+      ROOT,
+      "test",
+      "helpers",
+      "hello-dead-proxy-fixture.ts",
+    );
+
+    let status = 0;
+    let stdout = "";
+    try {
+      stdout = execFileSync(tsx, [fixture, `http://127.0.0.1:${port}`], {
+        cwd: ROOT,
+        encoding: "utf8",
+        timeout: 30_000,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      const failed = error as { status?: number; stdout?: string };
+      status = failed.status ?? -1;
+      stdout = failed.stdout ?? "";
+    }
+
+    expect(status).toBe(3);
+    const lines = stdout.split("\n").filter(Boolean);
+    expect(lines).toHaveLength(1);
+    // The transport either fails fast from the refused proxy or the REF'D wall
+    // clock fires; both are typed rejections, never a silent natural exit.
+    expect(() => JSON.parse(lines[0]!)).not.toThrow();
+  }, 40_000);
+});
+
 describe("real child-process lifecycle with a dead CDP endpoint", () => {
   it("exits nonzero with exactly one JSON error line (never a silent exit 0)", async () => {
     const port = await closedPort();
