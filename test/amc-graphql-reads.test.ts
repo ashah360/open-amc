@@ -39,6 +39,20 @@ class DeferredTransport implements Transport {
   }
 }
 
+class ThrowOnceTransport implements Transport {
+  readonly name = "throw-once";
+  calls = 0;
+  constructor(
+    private readonly firstError: Error,
+    private readonly thenResponse: ResponseOutput,
+  ) {}
+  async request(_input: RequestInput): Promise<ResponseOutput> {
+    this.calls += 1;
+    if (this.calls === 1) throw this.firstError;
+    return this.thenResponse;
+  }
+}
+
 const roots: string[] = [];
 afterEach(async () =>
   Promise.all(
@@ -179,6 +193,125 @@ describe("AMC GraphQL reads", () => {
     expect(repairs).toBe(1);
     expect(transport.sent).toHaveLength(2);
     expect(transport.sent[1]?.headers.cookie).toContain("root=repaired");
+  });
+
+  it("retries a read once (same session) past a transient anti-bot response, without a browser repair", async () => {
+    // Live evidence: the direct graph endpoint intermittently answers the FIRST
+    // request with a transient anti-bot/rate-limit response (429 or a 200 whose
+    // body is an interstitial, not JSON) and the immediate next request on the
+    // SAME session succeeds. That transient must not surface as a contract/HTTP
+    // error, and it must not trigger a browser repair.
+    const transients: ResponseOutput[] = [
+      // 429 with a non-JSON (interstitial) body, no repair markers.
+      {
+        status: 429,
+        headers: { "content-type": "text/html; charset=utf-8" },
+        bodyText: "<html>too many requests</html>",
+        timingMs: 1,
+        transport: "recording",
+        setCookieNames: [],
+        setCookies: [],
+      },
+      // HTTP 200 but an interstitial HTML body rather than JSON.
+      {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+        bodyText: "<html>please wait</html>",
+        timingMs: 1,
+        transport: "recording",
+        setCookieNames: [],
+        setCookies: [],
+      },
+    ];
+    for (const transient of transients) {
+      const store = await newStore();
+      let repairs = 0;
+      const transport = new QueueTransport([
+        transient,
+        jsonResponse(discoveryPayload()),
+      ]);
+      const client = new AmcGraphReadClient({
+        transport,
+        store,
+        repairSession: async () => {
+          repairs += 1;
+          return session("repaired");
+        },
+      });
+
+      const showtimes = await client.getShowtimes({
+        venue: resolveOfficialAmcTheaterUrl(
+          "https://www.amctheatres.com/movie-theatres/san-francisco/amc-metreon-16/showtimes",
+        ),
+        date: "2030-01-15",
+      });
+
+      expect(showtimes).toHaveLength(1);
+      expect(transport.sent).toHaveLength(2);
+      // Same-session retry: no browser repair happened, so the retry never
+      // carried a repaired-session cookie.
+      expect(repairs).toBe(0);
+      expect(transport.sent[1]?.headers.cookie ?? "").not.toContain(
+        "root=repaired",
+      );
+    }
+  });
+
+  it("retries a read once past a transient transport throw (EPROTO/TLS)", async () => {
+    const store = await newStore();
+    const eproto = Object.assign(
+      new Error("write EPROTO ... TLS fatal alert from server"),
+      { code: "EPROTO" },
+    );
+    const transport = new ThrowOnceTransport(
+      eproto,
+      jsonResponse(discoveryPayload()),
+    );
+    const client = new AmcGraphReadClient({ transport, store });
+
+    const showtimes = await client.getShowtimes({
+      venue: resolveOfficialAmcTheaterUrl(
+        "https://www.amctheatres.com/movie-theatres/san-francisco/amc-metreon-16/showtimes",
+      ),
+      date: "2030-01-15",
+    });
+    expect(showtimes).toHaveLength(1);
+    expect(transport.calls).toBe(2);
+  });
+
+  it("stays fail-closed when a transient read failure persists past the one retry", async () => {
+    const store = await newStore();
+    const twoTransients = [
+      {
+        status: 429,
+        headers: { "content-type": "text/html; charset=utf-8" },
+        bodyText: "<html>too many requests</html>",
+        timingMs: 1,
+        transport: "recording",
+        setCookieNames: [],
+        setCookies: [],
+      },
+      {
+        status: 429,
+        headers: { "content-type": "text/html; charset=utf-8" },
+        bodyText: "<html>too many requests</html>",
+        timingMs: 1,
+        transport: "recording",
+        setCookieNames: [],
+        setCookies: [],
+      },
+    ];
+    const transport = new QueueTransport(twoTransients);
+    const client = new AmcGraphReadClient({ transport, store });
+    await expect(
+      client.getShowtimes({
+        venue: resolveOfficialAmcTheaterUrl(
+          "https://www.amctheatres.com/movie-theatres/san-francisco/amc-metreon-16/showtimes",
+        ),
+        date: "2030-01-15",
+      }),
+    ).rejects.toMatchObject({ code: "AMC_HTTP" });
+    expect(transport.sent).toHaveLength(2);
   });
 
   it("returns the strict seat grid and ticket prices from viewer.showtime", async () => {

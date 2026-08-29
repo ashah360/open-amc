@@ -4,7 +4,7 @@ import {
   SessionKey,
   SessionStore,
 } from "../auth-session";
-import { Transport } from "../transport";
+import { ResponseOutput, Transport } from "../transport";
 import { AmcChallengeError, AmcHttpError } from "./client";
 import {
   AMC_GRAPH_ORIGIN,
@@ -326,7 +326,15 @@ export class AmcGraphReadClient {
     let session = loaded.session;
     if (loaded.persisted) await this.options.onSessionLoaded?.(session);
     let mayCreateSession = !loaded.persisted;
-    let response = await this.dispatch(
+    // Reads (never writes) get exactly ONE bounded same-session re-dispatch past
+    // a TRANSIENT anti-bot/egress hiccup on the direct graph endpoint: a
+    // transport throw (TLS EPROTO / connection reset / timeout), a transient
+    // HTTP status (429/5xx), or a 200 whose body is an interstitial rather than
+    // JSON. Live evidence shows the immediate next request on the same session
+    // succeeds. This is not a blind retry (it is single, transient-classified,
+    // same-session, read-only) and it runs before — not instead of — the
+    // challenge/repair and fail-closed classification below.
+    let response = await this.dispatchWithTransientRetry(
       session,
       operationName,
       query,
@@ -359,12 +367,37 @@ export class AmcGraphReadClient {
     }
   }
 
+  /**
+   * One bounded, same-session re-dispatch when the first attempt is a
+   * transient failure. If the first attempt throws a transport-class error, the
+   * retry may itself throw (propagated, fail-closed). Non-transient responses
+   * pass straight through to the caller's challenge/classification logic.
+   */
+  private async dispatchWithTransientRetry(
+    session: AmcSession,
+    operationName: string,
+    query: string,
+    variables: object,
+  ): Promise<ResponseOutput> {
+    let first: ResponseOutput;
+    try {
+      first = await this.dispatch(session, operationName, query, variables);
+    } catch (error) {
+      if (!isTransientTransportThrow(error)) throw error;
+      return this.dispatch(session, operationName, query, variables);
+    }
+    if (isTransientReadResponse(first)) {
+      return this.dispatch(session, operationName, query, variables);
+    }
+    return first;
+  }
+
   private dispatch(
     session: AmcSession,
     operationName: string,
     query: string,
     variables: object,
-  ) {
+  ): Promise<ResponseOutput> {
     const cookie = cookieHeaderFor(session, GRAPHQL_URL);
     return this.options.transport.request({
       method: "POST",
@@ -618,6 +651,57 @@ function nonNegative(value: unknown): value is number {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+/** Transient HTTP statuses worth exactly one same-session read retry. */
+const TRANSIENT_READ_STATUS = new Set([429, 500, 502, 503, 504]);
+
+/**
+ * A first read response that is a transient anti-bot/egress hiccup rather than
+ * a real answer: a transient HTTP status, or an HTTP 200 whose body is not JSON
+ * (an interstitial page). A genuine challenge (403/429 with challenge markers)
+ * is also transient-retryable here; if it persists, the caller's challenge path
+ * still runs on the second response.
+ */
+function isTransientReadResponse(response: ResponseOutput): boolean {
+  if (TRANSIENT_READ_STATUS.has(response.status)) return true;
+  if (response.status === 200 && !looksLikeJson(response.bodyText)) return true;
+  return false;
+}
+
+function looksLikeJson(body: string): boolean {
+  const trimmed = body.trimStart();
+  return trimmed.startsWith("{") || trimmed.startsWith("[");
+}
+
+// Exact socket/DNS/TLS/undici failure codes (plus the ECONN* family) that count
+// as a transient transport hiccup on a read. Deliberately NOT a catch-all: a
+// programmer error (ERR_INVALID_ARG_TYPE) or typed contract error keeps its
+// identity and is never retried.
+const TRANSIENT_TRANSPORT_CODES = new Set([
+  "ETIMEDOUT",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EPROTO",
+  "EPIPE",
+]);
+const TRANSIENT_TRANSPORT_CODE_PREFIXES = [
+  "ECONN",
+  "UND_ERR_",
+  "ERR_TLS_",
+  "ERR_SSL_",
+];
+
+function isTransientTransportThrow(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string") {
+    if (TRANSIENT_TRANSPORT_CODES.has(code)) return true;
+    return TRANSIENT_TRANSPORT_CODE_PREFIXES.some((p) => code.startsWith(p));
+  }
+  return /TLS fatal|SSL routines|hello transport timed out/i.test(
+    error.message,
+  );
+}
+
 function isChallenge(status: number, body: string): boolean {
   return (
     (status === 403 || status === 429) &&
