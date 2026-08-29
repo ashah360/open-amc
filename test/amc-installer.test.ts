@@ -77,8 +77,34 @@ function makeSandbox(
     ].join("\n"),
   );
   fake("npm", `echo "npm $*" >> "$FAKE_LOG_DIR/npm.log"\nexit 0`);
+  // Agent-platform fakes model the REAL contracts observed on this host:
+  // `skills install` records argv and exits 0 even on a fetch failure, and
+  // installation is proven independently by `skills list`. `hermes` supports
+  // `--now` only when its `--help` advertises it (FAKE_<AGENT>_NOW=1). The
+  // listed skill is controlled by FAKE_<AGENT>_LISTED (default present).
   for (const agent of options.agents ?? []) {
-    fake(agent, `echo "${agent} $*" >> "$FAKE_LOG_DIR/${agent}.log"\nexit 0`);
+    const upper = agent.toUpperCase();
+    fake(
+      agent,
+      [
+        `log="$FAKE_LOG_DIR/${agent}.log"`,
+        `if [ "\${1:-} \${2:-}" = "skills install" ] && [ "\${3:-}" = "--help" ]; then`,
+        `  echo "Usage: ${agent} skills install <identifier> [--category c] [--name n] [--force] [--yes]"`,
+        `  [ "\${FAKE_${upper}_NOW:-0}" = "1" ] && echo "      --now    refresh the current session"`,
+        `  exit 0`,
+        `fi`,
+        `if [ "\${1:-} \${2:-}" = "skills install" ]; then`,
+        `  echo "${agent} $*" >> "$log"`,
+        `  exit 0`,
+        `fi`,
+        `if [ "\${1:-} \${2:-}" = "skills list" ]; then`,
+        `  [ "\${FAKE_${upper}_LISTED:-1}" = "1" ] && echo "open-amc  Buy AMC movie tickets"`,
+        `  echo "some-other-skill  unrelated" ; exit 0`,
+        `fi`,
+        `echo "${agent} $*" >> "$log"`,
+        `exit 0`,
+      ].join("\n"),
+    );
   }
 
   const env: NodeJS.ProcessEnv = {
@@ -150,10 +176,12 @@ describe("install.sh", () => {
     expect(readlinkSync(link)).toBe(path.join(installDir, "bin", "amc"));
     // Doctor verification actually ran through the symlink.
     expect(logOf(sandbox, "amc")).toContain("amc doctor --json");
-    // Hermes got the pinned raw root SKILL URL with --now.
+    // Hermes got the pinned raw root SKILL URL, noninteractive with --yes.
+    // This host's Hermes does NOT advertise --now, so it is omitted.
     expect(logOf(sandbox, "hermes")).toContain(
-      "skills install https://raw.githubusercontent.com/ashah360/open-amc/v0.1.2/SKILL.md --now",
+      "skills install https://raw.githubusercontent.com/ashah360/open-amc/v0.1.2/SKILL.md --yes",
     );
+    expect(logOf(sandbox, "hermes")).not.toContain("--now");
     // OpenClaw got the local checkout root, global, with a stable name.
     expect(logOf(sandbox, "openclaw")).toContain(
       `skills install ${installDir} --global --as open-amc`,
@@ -234,17 +262,45 @@ describe("install.sh", () => {
     const { status, output } = runInstaller(sandbox, ["--agent", "auto"]);
     expect(status).toBe(0);
     expect(output).toContain(
-      "hermes skills install https://raw.githubusercontent.com/ashah360/open-amc/v0.1.2/SKILL.md --now",
+      "hermes skills install https://raw.githubusercontent.com/ashah360/open-amc/v0.1.2/SKILL.md --yes",
     );
     expect(output).toContain("--global --as open-amc");
+    expect(output).not.toContain("--now");
   });
 
-  it("detects hermes alone under --agent auto", () => {
+  it("detects hermes alone under --agent auto and verifies it", () => {
     const sandbox = makeSandbox({ agents: ["hermes"] });
     const { status } = runInstaller(sandbox, ["--agent", "auto"]);
     expect(status).toBe(0);
     expect(logOf(sandbox, "hermes")).toContain("skills install");
     expect(logOf(sandbox, "openclaw")).toBe("");
+  });
+
+  it("appends --now only when this Hermes advertises it in --help", () => {
+    const sandbox = makeSandbox({ agents: ["hermes"] });
+    const { status } = runInstaller(sandbox, ["--agent", "hermes"], {
+      FAKE_HERMES_NOW: "1",
+    });
+    expect(status).toBe(0);
+    expect(logOf(sandbox, "hermes")).toContain("--yes --now");
+  });
+
+  it("fails when hermes install exits 0 but the skill is not listed", () => {
+    const sandbox = makeSandbox({ agents: ["hermes"] });
+    const { status, output } = runInstaller(sandbox, ["--agent", "hermes"], {
+      FAKE_HERMES_LISTED: "0",
+    });
+    expect(status).not.toBe(0);
+    expect(output).toContain("did not register the open-amc skill");
+  });
+
+  it("fails when openclaw install exits 0 but the skill is not listed", () => {
+    const sandbox = makeSandbox({ agents: ["openclaw"] });
+    const { status, output } = runInstaller(sandbox, ["--agent", "openclaw"], {
+      FAKE_OPENCLAW_LISTED: "0",
+    });
+    expect(status).not.toBe(0);
+    expect(output).toContain("did not register the open-amc skill");
   });
 
   it("fails (does not claim success) when doctor verification fails", () => {

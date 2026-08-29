@@ -106,17 +106,43 @@ case ":$PATH:" in
 esac
 
 # --- Agent skill installation via each platform's NATIVE mechanism.
+# Verify the skill actually landed: some CLIs print a fetch error yet exit 0, so
+# `set -e` alone cannot prove installation. We independently check the skill
+# list for an exact `open-amc` token and fail otherwise.
+
+# Bounded exact-token match of `open-amc` in a skills list, resistant to
+# substrings like `open-amc-extra`.
+skill_listed() {
+  printf '%s\n' "$1" | grep -Eq '(^|[^A-Za-z0-9_-])open-amc([^A-Za-z0-9_-]|$)'
+}
+
 install_hermes_skill() {
   log "Installing Hermes skill from $OPEN_AMC_SKILL_URL"
-  hermes skills install "$OPEN_AMC_SKILL_URL" --now
+  # Always noninteractive. Append --now only when this Hermes supports it
+  # (probe --help rather than trusting a docs version).
+  hermes_args=(skills install "$OPEN_AMC_SKILL_URL" --yes)
+  if hermes skills install --help 2>&1 | grep -q -- '--now'; then
+    hermes_args+=(--now)
+  fi
+  hermes "${hermes_args[@]}" || true
+  if ! skill_listed "$(hermes skills list 2>/dev/null || true)"; then
+    echo "error: Hermes did not register the open-amc skill; install it manually and start a new session" >&2
+    exit 1
+  fi
+  log "Hermes skill open-amc verified. Start a new Hermes session to use it."
 }
 install_openclaw_skill() {
   log "Installing OpenClaw skill from $OPEN_AMC_HOME"
-  openclaw skills install "$OPEN_AMC_HOME" --global --as open-amc
+  openclaw skills install "$OPEN_AMC_HOME" --global --as open-amc || true
+  if ! skill_listed "$(openclaw skills list 2>/dev/null || true)"; then
+    echo "error: OpenClaw did not register the open-amc skill; install it manually" >&2
+    exit 1
+  fi
+  log "OpenClaw skill open-amc verified."
 }
 print_later_commands() {
   log "No agent platform detected. The CLI is installed; to add the skill later:"
-  log "  hermes skills install $OPEN_AMC_SKILL_URL --now"
+  log "  hermes skills install $OPEN_AMC_SKILL_URL --yes   # then start a new Hermes session"
   log "  openclaw skills install $OPEN_AMC_HOME --global --as open-amc"
 }
 

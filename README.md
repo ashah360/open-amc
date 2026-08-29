@@ -45,8 +45,17 @@ curl -fsSL https://raw.githubusercontent.com/ashah360/open-amc/v0.1.2/install.sh
 It pins v0.1.2 into `~/.open-amc/app` (override `OPEN_AMC_HOME`), links
 `~/.local/bin/amc` (override `BIN_DIR`), verifies `amc doctor --json`, and
 installs the skill through the platform's native mechanism (Hermes: pinned raw
-`SKILL.md` URL with `--now`; OpenClaw: the local checkout root with
-`--global --as open-amc`). Rerunning safely updates the same install.
+`SKILL.md` URL, noninteractive with `--yes` — start a new Hermes session
+afterward; OpenClaw: the local checkout root with `--global --as open-amc`),
+then verifies the skill is registered before reporting success. Rerunning
+safely updates the same install.
+
+Installing the skill manually later:
+
+```bash
+hermes skills install https://raw.githubusercontent.com/ashah360/open-amc/v0.1.2/SKILL.md --yes   # then start a new Hermes session
+openclaw skills install <path-to-open-amc-checkout> --global --as open-amc
+```
 
 **C. One explicit setup, then talk normally.**
 
