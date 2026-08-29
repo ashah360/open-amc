@@ -57,6 +57,58 @@ describe("AMC GraphQL order projections", () => {
     });
   });
 
+  it("returns the authoritative provider total even when it differs from the pre-cart estimate", async () => {
+    // Reproduced River East 21: seat-map estimate 56.04, authoritative
+    // created-cart remainingBalance 51.93. The exact valid cart must project
+    // successfully and return the provider total, not throw cart.total.
+    const response = pendingOrderResponse();
+    response.data.viewer.order.remainingBalance = 51.93;
+    const graph = new FakeGraph([response]);
+    const provider = new AmcGraphqlOrderProjectionProvider(graph);
+
+    await expect(
+      provider.inspectCart(token, "guest@example.test", {
+        ...intent,
+        expectedTotal: "56.04",
+      }),
+    ).resolves.toMatchObject({
+      orderToken: token,
+      showtimeId: "900000006",
+      seats: [
+        { name: "E9", sku: "TICKET-RS-900000006-ADULT", row: 3, column: 14 },
+      ],
+      tickets: [{ sku: "TICKET-RS-900000006-ADULT", quantity: 1 }],
+      total: "51.93",
+      status: "OPEN",
+    });
+  });
+
+  it("still fails closed on seat, showtime, and ticket mismatches", async () => {
+    const wrongSeat = pendingOrderResponse();
+    wrongSeat.data.viewer.order.groups[0]!.reservedSeats = "E8";
+    await expect(
+      new AmcGraphqlOrderProjectionProvider(
+        new FakeGraph([wrongSeat]),
+      ).inspectCart(token, "guest@example.test", intent),
+    ).rejects.toBeInstanceOf(AmcOrderProjectionError);
+
+    const wrongShowtime = pendingOrderResponse();
+    wrongShowtime.data.viewer.order.groups[0]!.showtime.showtimeId = 900099999;
+    await expect(
+      new AmcGraphqlOrderProjectionProvider(
+        new FakeGraph([wrongShowtime]),
+      ).inspectCart(token, "guest@example.test", intent),
+    ).rejects.toBeInstanceOf(AmcOrderProjectionError);
+
+    const wrongTicket = pendingOrderResponse();
+    wrongTicket.data.viewer.order.groups[0]!.items[0]!.quantity = 2;
+    await expect(
+      new AmcGraphqlOrderProjectionProvider(
+        new FakeGraph([wrongTicket]),
+      ).inspectCart(token, "guest@example.test", intent),
+    ).rejects.toBeInstanceOf(AmcOrderProjectionError);
+  });
+
   it("projects confirmed purchase and exact refundable lines from viewer.order", async () => {
     const graph = new FakeGraph([
       fulfilledOrderResponse(),

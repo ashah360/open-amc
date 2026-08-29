@@ -846,6 +846,75 @@ describe("AMC consequential commerce lifecycle", () => {
     expect(payment.reconcileCalls).toBe(1);
   });
 
+  it("recovers a purchase against the authoritative cart total, not the pre-cart estimate", async () => {
+    // Pre-cart estimate 56.04; authoritative created-cart total 51.93 was
+    // journaled at CART_OPEN. A recovered purchase charged the authoritative
+    // 51.93 must be accepted; the stale 56.04 must be rejected.
+    const executor = new FakeCommerceExecutor();
+    const payment = new FakePaymentExecutor();
+    const journal = new MemoryCheckoutJournal();
+    const estimateIntent = {
+      ...createIntent(),
+      expectedTotal: "56.04" as const,
+    };
+    journal.record = {
+      version: 1,
+      attemptId: journal.attemptId(estimateIntent),
+      state: "PURCHASE_DISPATCHING",
+      intent: estimateIntent,
+      orderToken: executor.cart.orderToken,
+      cartTotal: "51.93",
+      updatedAt: "2030-01-15T08:29:00.000Z",
+    };
+    payment.reconciledPurchase = {
+      orderToken: executor.cart.orderToken,
+      confirmationNumber: "0000000002",
+      chargedTotal: "51.93",
+      status: "CONFIRMED",
+    };
+    const service = new AmcCommerceService({
+      executor,
+      payment,
+      journal,
+      now: () => new Date("2030-01-15T08:30:00.000Z"),
+    });
+
+    await expect(
+      service.recoverCheckout({
+        showtimeId: estimateIntent.showtimeId,
+        seatNames: ["H7", "H8"],
+        email: "guest@example.test",
+      }),
+    ).resolves.toMatchObject({
+      kind: "confirmed",
+      purchase: { chargedTotal: "51.93", reconciled: true },
+    });
+
+    // A purchase that charged the stale pre-cart estimate is rejected.
+    payment.reconciledPurchase = {
+      orderToken: executor.cart.orderToken,
+      confirmationNumber: "0000000003",
+      chargedTotal: "56.04",
+      status: "CONFIRMED",
+    };
+    journal.record = {
+      version: 1,
+      attemptId: journal.attemptId(estimateIntent),
+      state: "PURCHASE_DISPATCHING",
+      intent: estimateIntent,
+      orderToken: executor.cart.orderToken,
+      cartTotal: "51.93",
+      updatedAt: "2030-01-15T08:29:00.000Z",
+    };
+    await expect(
+      service.recoverCheckout({
+        showtimeId: estimateIntent.showtimeId,
+        seatNames: ["H7", "H8"],
+        email: "guest@example.test",
+      }),
+    ).rejects.toBeInstanceOf(ConsequenceMismatchError);
+  });
+
   it("recovers a known open cart token without creating another hold", async () => {
     const executor = new FakeCommerceExecutor();
     const journal = new MemoryCheckoutJournal();

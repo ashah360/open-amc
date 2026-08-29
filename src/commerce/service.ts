@@ -260,7 +260,8 @@ export class AmcCommerceService {
         if (purchased) {
           if (
             purchased.orderToken !== current.orderToken ||
-            purchased.chargedTotal !== current.intent.expectedTotal ||
+            purchased.chargedTotal !==
+              (current.cartTotal ?? current.intent.expectedTotal) ||
             !purchased.confirmationNumber
           ) {
             throw new ConsequenceMismatchError(
@@ -294,6 +295,7 @@ export class AmcCommerceService {
         await journal.save({
           ...current,
           state: "CART_OPEN",
+          cartTotal: cart.total,
           updatedAt: this.now().toISOString(),
         });
         return { kind: "cart" as const, cart: clone(cart) };
@@ -354,6 +356,7 @@ export class AmcCommerceService {
           await journal.save({
             ...existing,
             state: "CART_OPEN",
+            cartTotal: recovered.total,
             updatedAt: this.now().toISOString(),
           });
           return clone(recovered);
@@ -395,6 +398,7 @@ export class AmcCommerceService {
             ...base,
             state: "CART_OPEN",
             orderToken: cart.orderToken,
+            cartTotal: cart.total,
             updatedAt: this.now().toISOString(),
           });
           return cart;

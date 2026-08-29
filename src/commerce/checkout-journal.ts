@@ -23,6 +23,15 @@ export interface CheckoutAttempt {
   updatedAt: string;
   checkoutSessionId?: string;
   orderToken?: string;
+  /**
+   * The AUTHORITATIVE provider cart total (`CartSnapshot.total` /
+   * `remainingBalance`) captured once the cart projection succeeded. It can
+   * differ from the pre-cart `intent.expectedTotal` estimate by theater, so
+   * recovery compares a recovered purchase's charged total against this, not
+   * the stale estimate. Deliberately separate from `intent` so the
+   * intent-derived `attemptId` identity is unchanged.
+   */
+  cartTotal?: Money;
   confirmationNumber?: string;
   chargedTotal?: Money;
 }
@@ -487,6 +496,7 @@ function validateAttempt(value: unknown, expectedId: string): CheckoutAttempt {
   ) {
     throw new CheckoutJournalCorruptError();
   }
+  const cartTotal = optionalMoney(value.cartTotal);
   const confirmationNumber = optionalString(value.confirmationNumber);
   const chargedTotal = optionalMoney(value.chargedTotal);
   if (
@@ -514,6 +524,7 @@ function validateAttempt(value: unknown, expectedId: string): CheckoutAttempt {
     "updatedAt",
     "checkoutSessionId",
     "orderToken",
+    "cartTotal",
     "confirmationNumber",
     "chargedTotal",
   ]);
@@ -528,6 +539,7 @@ function validateAttempt(value: unknown, expectedId: string): CheckoutAttempt {
     updatedAt: value.updatedAt,
     ...(checkoutSessionId ? { checkoutSessionId } : {}),
     ...(orderToken ? { orderToken } : {}),
+    ...(cartTotal ? { cartTotal } : {}),
     ...(confirmationNumber ? { confirmationNumber } : {}),
     ...(chargedTotal ? { chargedTotal } : {}),
   };

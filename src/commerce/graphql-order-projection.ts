@@ -201,9 +201,13 @@ function cartSnapshot(
   ) {
     throw new AmcOrderProjectionError("cart.tickets");
   }
+  // AMC's authoritative created-cart total is `remainingBalance`; it can differ
+  // from the pre-cart seat-map estimate (`intent.expectedTotal`) by theater
+  // (fee/tax schedules). Parse it as canonical money and return it as the
+  // authoritative CartSnapshot.total — do NOT reject on an estimate mismatch.
+  // Checkout submit still consents to this authoritative total from a fresh
+  // preview before any payment.
   const total = money(order.remainingBalance, "cart.remainingBalance");
-  if (total !== intent.expectedTotal)
-    throw new AmcOrderProjectionError("cart.total");
   return {
     orderToken,
     showtimeId: intent.showtimeId,
