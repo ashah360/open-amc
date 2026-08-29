@@ -1283,9 +1283,16 @@ function validateCartAgainstIntent(
   const expectedSeats = intent.seats.map(
     ({ quantity: _quantity, ...seat }) => seat,
   );
+  // The provider-created cart's canonical `total` (its `remainingBalance`) is
+  // AUTHORITATIVE and becomes the returned CartSnapshot.total and the checkout
+  // handoff total. `intent.expectedTotal` is only a pre-cart seat-map estimate,
+  // and AMC's authoritative created-cart total legitimately differs by theater
+  // (e.g. per-theater fee/tax schedules), so it is NOT required to match here.
+  // Seats, showtime, ticket SKU/aggregate quantity, and open/unexpired status
+  // are still enforced exactly, and checkout submit still re-reads and consents
+  // to the authoritative current cart total before any payment.
   if (
     cart.showtimeId !== intent.showtimeId ||
-    cart.total !== intent.expectedTotal ||
     canonical(cart.seats) !== canonical(expectedSeats) ||
     canonical(cart.tickets) !== canonical(aggregateTickets(intent))
   ) {

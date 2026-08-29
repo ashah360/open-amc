@@ -202,23 +202,28 @@ describe("AMC consequential commerce lifecycle", () => {
     expect(executor.createCalls).toBe(0);
   });
 
-  it("fails closed on expired carts and exact total mismatches, surfacing the known token", async () => {
+  it("accepts the authoritative provider cart total when it differs from the pre-cart estimate", async () => {
+    // Reproduced River East 21: the pre-cart seat-map estimate (56.04) differs
+    // from AMC's authoritative created-cart total (51.93) by theater. The exact
+    // valid cart (same showtime, seats, SKU/quantity, open) must succeed and
+    // return the provider total, not be stranded on a total mismatch.
     const executor = new FakeCommerceExecutor();
     const service = serviceWith(executor);
-    executor.cart.total = "55.55";
-    // The cart was created (token known) but its details did not match the
-    // request: fail closed AND surface the token so the hold can be released,
-    // never stranded.
-    const mismatch = await service
-      .createCart(createIntent())
-      .catch((error: unknown) => error);
-    expect(mismatch).toBeInstanceOf(CartHoldWithoutSnapshotError);
-    expect(mismatch).toMatchObject({
-      operation: "cart",
-      reconciliation: { orderToken: executor.cart.orderToken },
-    });
+    executor.cart.total = "51.93";
+    const intent = { ...createIntent(), expectedTotal: "56.04" as const };
 
-    executor.cart.total = "55.56";
+    await expect(service.createCart(intent)).resolves.toMatchObject({
+      orderToken: executor.cart.orderToken,
+      showtimeId: "900000005",
+      status: "OPEN",
+      total: "51.93",
+    });
+    expect(executor.createCalls).toBe(1);
+  });
+
+  it("still fails closed (token surfaced) on an expired created cart", async () => {
+    const executor = new FakeCommerceExecutor();
+    const service = serviceWith(executor);
     executor.cart.expiresAt = "2030-01-15T08:29:00.000Z";
     const expired = await service
       .createCart(createIntent())
@@ -227,7 +232,7 @@ describe("AMC consequential commerce lifecycle", () => {
     expect(expired).toMatchObject({
       reconciliation: { orderToken: executor.cart.orderToken },
     });
-    expect(executor.createCalls).toBe(2);
+    expect(executor.createCalls).toBe(1);
   });
 
   it("requires checkout confirmation binding and enforces single-flight per order", async () => {

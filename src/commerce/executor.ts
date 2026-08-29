@@ -12,6 +12,13 @@ export interface CartCreateIntent {
   showtimeId: string;
   seats: CartSeatIntent[];
   waiveSubscriptionDiscounts: boolean;
+  /**
+   * Pre-cart seat-map ESTIMATE only. AMC's authoritative total is the one on
+   * the created cart (`CartSnapshot.total`), which can differ by theater (fee /
+   * tax schedules); cart creation does not require this to match. Checkout
+   * submit consents to the authoritative current cart total from a fresh
+   * preview.
+   */
   expectedTotal: Money;
   holdAcknowledgement: "CREATE_HOLD";
 }
