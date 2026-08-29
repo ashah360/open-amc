@@ -18,32 +18,30 @@ an official AMC theater, list showtimes, inspect seats, hold seats in exactly
 one cart, and either hand the human a first-party checkout URL or complete
 checkout of that same cart after the human approves the exact total.
 
-## Install and readiness (do this first)
+## Readiness (do this first)
 
-Source of truth: https://github.com/ashah360/open-amc.git, pinned release tag
-`v0.1.2`. To update later, rerun the same installer (it safely updates the same
-checkout and symlink).
+This skill is operational only: it assumes the `amc` CLI is already installed
+(the human runs the audited installer once). It never downloads or executes any
+software itself.
 
-1. In your terminal tool, check whether the CLI already exists:
-   `command -v amc && amc doctor --json`. If `doctor` reports ready, skip to
+1. In your terminal tool, confirm the CLI exists and is ready:
+   `command -v amc` then `amc doctor --json`. If `doctor` reports ready, go to
    setup or straight to reads.
-2. If `amc` is missing, install it (Node.js >= 22 required). Either run the
-   pinned installer from a clone (auditable):
-   `git clone --branch v0.1.2 --depth 1 https://github.com/ashah360/open-amc.git
-   && bash open-amc/install.sh --agent auto`
-   or the documented one-liner:
-   `curl -fsSL https://raw.githubusercontent.com/ashah360/open-amc/v0.1.2/install.sh | bash -s -- --agent auto`.
-   The installer puts `amc` at `~/.local/bin/amc`; ensure that is on PATH.
+2. If `amc` is missing or not ready, STOP and ask the human to install it by
+   following the project's onboarding, then start a new session. Point them to
+   the audited instructions (a plain link, not a command to run):
+   https://github.com/ashah360/open-amc#give-this-to-your-agent . Do not attempt
+   to install, download, or build anything yourself.
 3. One explicit setup (opens a visible installed Chrome once; needs a real
    Chrome and trusted egress):
    `amc setup --theater-url "<official theater URL from the user>" --json`.
    Success returns `{"kind":"setup","cli":"ready","auth":"valid",...}` with a
    `nextCommand`. On failure follow the error's guidance; do not loop setup.
 4. Payment (agent self-checkout only) stays an explicitly optional,
-   user-supplied capability: a secret-manager-backed CardProvider module (copy
-   `templates/amc-capabilities.template.cjs`), exported via
-   `AMC_CAPABILITY_MODULE`. Without it, stop after the checkout URL handoff —
-   human checkout handoff is fully supported with zero payment config.
+   user-supplied capability: a secret-manager-backed CardProvider module
+   configured via `AMC_CAPABILITY_MODULE`. Without it, stop after the checkout
+   URL handoff — human checkout handoff is fully supported with zero payment
+   config.
 
 ## Quick reference
 
@@ -164,9 +162,8 @@ endpoint.
 
 ## Copy-paste prompts for a zero-context agent
 
-> Install Open AMC (clone https://github.com/ashah360/open-amc.git at tag
-> v0.1.2 and run `bash install.sh --agent auto`, or use the documented
-> installer one-liner), then run
+> Confirm the CLI is ready with `amc doctor --json` (if it is missing, ask me
+> to install it first), then run
 > `amc setup --theater-url "https://www.amctheatres.com/movie-theatres/new-york-city/amc-empire-25/showtimes" --json`.
 > Once setup reports ready, find IMAX showtimes for 2030-01-15, list available
 > seats for the 7pm show, hold seats E7 and E8 in one cart with

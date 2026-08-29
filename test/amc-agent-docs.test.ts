@@ -15,6 +15,52 @@ const TEMPLATE = readFileSync(
 const README = readFileSync(path.join(ROOT, "README.md"), "utf8");
 
 describe("agent docs", () => {
+  it("both SKILL files are scanner-safe: no software bootstrap/acquisition commands", () => {
+    // The Hermes skill scanner quarantines skills that instruct the agent to
+    // download/execute software. The skill is operational only; all install
+    // commands live in README + install.sh, which the human runs and audits.
+    const root = readFileSync(path.join(ROOT, "SKILL.md"), "utf8");
+    const forbidden: Array<[string, RegExp]> = [
+      ["curl", /\bcurl\b/i],
+      ["wget", /\bwget\b/i],
+      ["curl/wget pipe-to-shell", /\|\s*(bash|sh|zsh)\b/i],
+      ["git clone", /\bgit\s+clone\b/i],
+      ["npm install", /\bnpm\s+(install|i|ci)\b/i],
+      ["npm link", /\bnpm\s+link\b/i],
+      ["npx", /\bnpx\b/i],
+      ["bash install.sh", /\b(bash|sh)\s+[^\n]*install\.sh\b/i],
+      ["install.sh invocation", /\binstall\.sh\b/],
+      ["pnpm/yarn add", /\b(pnpm|yarn)\s+(add|install)\b/i],
+      ["apt/brew/pip install", /\b(apt(-get)?|brew|pip3?)\s+install\b/i],
+      ["node dist bootstrap", /\bnode\s+dist\//i],
+    ];
+    for (const source of [
+      ["SKILL.md", root],
+      ["skills/open-amc/SKILL.md", SKILL],
+    ] as const) {
+      for (const [label, pattern] of forbidden) {
+        expect(
+          pattern.test(source[1]),
+          `${source[0]} must not contain ${label}`,
+        ).toBe(false);
+      }
+      // ...but it must still be an operational skill.
+      for (const operational of [
+        "amc setup",
+        "amc showtimes",
+        "amc seats",
+        "amc cart create",
+        "amc order release",
+      ]) {
+        expect(source[1]).toContain(operational);
+      }
+      // The human onboarding link stays a plain URL, never an executable line.
+      expect(source[1]).toContain(
+        "https://github.com/ashah360/open-amc#give-this-to-your-agent",
+      );
+    }
+  });
+
   it("root SKILL.md is byte-identical to the canonical skills/open-amc/SKILL.md", () => {
     // The canonical source is skills/open-amc/SKILL.md; the repository-root
     // copy exists so Hermes (raw URL install) and OpenClaw (root discovery on
@@ -82,9 +128,13 @@ describe("agent docs", () => {
   });
 
   it("uses the exact public clone URL and permits downstream composition", () => {
-    for (const doc of [AGENTS, SKILL]) {
-      expect(doc).toContain("https://github.com/ashah360/open-amc.git");
-    }
+    // The clone URL lives in AGENTS (install guidance). The SKILL is
+    // operational-only and scanner-safe, so it carries no acquisition command
+    // — only the plain human onboarding link.
+    expect(AGENTS).toContain("https://github.com/ashah360/open-amc.git");
+    expect(SKILL).toContain(
+      "https://github.com/ashah360/open-amc#give-this-to-your-agent",
+    );
     // Orchestration does not ship here, but building on the primitives is
     // explicitly permitted — no blanket prohibition remains.
     expect(AGENTS).not.toMatch(/should be built around it/i);
