@@ -116,6 +116,35 @@ describe("AMC GraphQL reads", () => {
     ]);
   });
 
+  it("tolerates a null group heading (fallback) and skips only a genuinely unlabeled group", async () => {
+    const store = await newStore();
+    const transport = new QueueTransport([
+      jsonResponse(riverEastMixedHeadingsPayload()),
+    ]);
+    const client = new AmcGraphReadClient({ transport, store });
+
+    const showtimes = await client.getShowtimes({
+      venue: resolveOfficialAmcTheaterUrl(
+        "https://www.amctheatres.com/movie-theatres/chicago/amc-river-east-21/showtimes",
+      ),
+      date: "2030-01-15",
+    });
+
+    // Healthy heading group + null-heading-with-fallback group parse; the
+    // unlabeled group (null heading AND empty attributes) is skipped, but its
+    // valid siblings all survive — one null optional heading no longer kills
+    // the whole valid theater response.
+    const byId = new Map(showtimes.map((s) => [s.id, s]));
+    expect(byId.get("900000010")?.format).toBe("Dolby Cinema at AMC");
+    expect(byId.get("900000011")?.format).toBe("Laser at AMC");
+    // The unlabeled group's showtime is not present...
+    expect(byId.has("900000012")).toBe(false);
+    // ...and the healthy sibling on a second movie survives.
+    expect(byId.get("900000020")?.format).toBe("IMAX at AMC");
+    expect(byId.get("900000020")?.theaterId).toBe("133");
+    expect(showtimes).toHaveLength(3);
+  });
+
   it("repairs one positively classified graph challenge and retries once", async () => {
     const store = await newStore();
     let repairs = 0;
@@ -471,6 +500,131 @@ function discoveryPayload() {
     },
   };
 }
+// Mirrors the live River East 21 shape: HTTP 200, no GraphQL errors, exact
+// provider theater id/slug, healthy siblings, plus one group with a null
+// heading (valid format-level fallback) and one group with a null heading AND
+// empty attributes (genuinely unlabeled).
+function riverEastMixedHeadingsPayload() {
+  const node = (showtimeId: number) => ({
+    node: {
+      showtimeId,
+      businessDate: "2030-01-15",
+      when: "2030-01-16T01:00:00.000Z",
+      status: "Sellable",
+      display: { time: "6:00", amPm: "PM" },
+    },
+  });
+  const theatre = {
+    theatre: {
+      theatreId: 133,
+      name: "AMC River East 21",
+      slug: "amc-river-east-21",
+    },
+    formats: {
+      date: "2030-01-15",
+      items: [
+        {
+          // Healthy heading present.
+          attributes: [{ name: "Dolby Cinema at AMC" }],
+          groups: {
+            edges: [
+              {
+                node: {
+                  showtimeGroupHeadingAttribute: {
+                    name: "Dolby Cinema at AMC",
+                  },
+                  showtimes: { edges: [node(900000010)] },
+                },
+              },
+            ],
+          },
+        },
+        {
+          // Null heading, but a valid format-level attribute fallback exists.
+          attributes: [{ name: "Laser at AMC" }],
+          groups: {
+            edges: [
+              {
+                node: {
+                  showtimeGroupHeadingAttribute: null,
+                  showtimes: { edges: [node(900000011)] },
+                },
+              },
+            ],
+          },
+        },
+        {
+          // Null heading AND empty attributes: genuinely unlabeled -> skipped.
+          attributes: [],
+          groups: {
+            edges: [
+              {
+                node: {
+                  showtimeGroupHeadingAttribute: null,
+                  showtimes: { edges: [node(900000012)] },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  };
+  const secondMovieTheatre = {
+    theatre: {
+      theatreId: 133,
+      name: "AMC River East 21",
+      slug: "amc-river-east-21",
+    },
+    formats: {
+      date: "2030-01-15",
+      items: [
+        {
+          attributes: [{ name: "IMAX at AMC" }],
+          groups: {
+            edges: [
+              {
+                node: {
+                  showtimeGroupHeadingAttribute: { name: "IMAX at AMC" },
+                  showtimes: { edges: [node(900000020)] },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  };
+  return {
+    data: {
+      viewer: {
+        user: {
+          movies: {
+            items: [
+              {
+                movie: {
+                  movieId: 80010,
+                  name: "Example One",
+                  slug: "one-80010",
+                },
+                theatres: [theatre],
+              },
+              {
+                movie: {
+                  movieId: 80020,
+                  name: "Example Two",
+                  slug: "two-80020",
+                },
+                theatres: [secondMovieTheatre],
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
+}
+
 function inventoryPayload() {
   return { data: { viewer: { showtime: inventoryShowtime(900000001) } } };
 }

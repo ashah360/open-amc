@@ -183,16 +183,26 @@ export class AmcGraphReadClient {
             "DatedShowtimes",
           )) {
             const group = recordAt(edge, ["node"], "DatedShowtimes");
-            const heading = optionalString(
-              recordAt(
-                group,
-                ["showtimeGroupHeadingAttribute"],
-                "DatedShowtimes",
-              ).name,
-            );
+            // `showtimeGroupHeadingAttribute` is optional: the provider legitimately
+            // returns it as null for one group even in an otherwise complete
+            // response. Prefer its name when present, otherwise fall back to the
+            // format-level attribute names.
+            const headingAttribute = group.showtimeGroupHeadingAttribute;
+            const heading =
+              headingAttribute == null
+                ? null
+                : optionalString(
+                    recordAt(
+                      group,
+                      ["showtimeGroupHeadingAttribute"],
+                      "DatedShowtimes",
+                    ).name,
+                  );
             const formatName = heading ?? fallbackFormat;
-            if (!formatName)
-              throw new AmcGraphReadContractError("DatedShowtimes");
+            // A genuinely unlabeled group (no heading AND no format attributes)
+            // is skipped rather than failing all valid sibling groups. We never
+            // fabricate a label.
+            if (!formatName) continue;
             for (const showtimeEdge of arrayAt(
               group,
               ["showtimes", "edges"],
