@@ -9,7 +9,10 @@ import {
 import { Transport, isFingerprintAdoptingTransport } from "../transport";
 import { AmcFingerprintProfile } from "./fingerprint";
 import { AmcAuthRejectedError, AmcChallengeError, AmcClient } from "./client";
-import { AmcBrowserRefresher } from "./browser-refresh";
+import {
+  AmcBrowserRefresher,
+  BrowserRefreshUnavailableError,
+} from "./browser-refresh";
 import { AmcGraphAuthProbe } from "./auth-probe";
 import {
   AmcSessionRefresher,
@@ -53,21 +56,34 @@ export class AmcBootstrapRequiredError extends Error {
  * lookups, and extend-expiration surface this stable code instead of raw
  * admission or transport errors, and never autonomously open a browser.
  */
+export type AmcSessionRepairStage =
+  | "target-challenge"
+  | "waiting-room"
+  | "queue-challenge"
+  | "direct-admission"
+  | "direct-transport"
+  | "listing-url-required"
+  | "browser-trust"
+  | "post-repair-canary";
+
 export class AmcSessionRepairRequiredError extends Error {
   readonly code = "AMC_SESSION_REPAIR_REQUIRED";
-  constructor(
-    readonly stage:
-      | "target-challenge"
-      | "waiting-room"
-      | "queue-challenge"
-      | "direct-admission"
-      | "direct-transport"
-      | "listing-url-required",
-  ) {
-    super(
-      `AMC session repair is required (${stage}); run \`amc auth repair --listing-url <official AMC theater URL> --browser-channel chrome --json\` (or --browser-executable/--cdp-url)`,
-    );
+  constructor(readonly stage: AmcSessionRepairStage) {
+    super(repairMessageFor(stage));
   }
+}
+
+/**
+ * Stage-specific, non-secret guidance. The browser-repair stages tell the user
+ * the browser could not establish a trusted session and to change the browser
+ * profile or egress — NOT to loop `auth repair`, which would just re-hit the
+ * same anti-bot wall.
+ */
+function repairMessageFor(stage: AmcSessionRepairStage): string {
+  if (stage === "browser-trust" || stage === "post-repair-canary") {
+    return `AMC session repair could not establish a trusted session through the browser (${stage}); the anti-bot layer did not clear from this browser/egress. Try an ordinary, non-headless Chrome profile you already use on amctheatres.com, or a different egress/proxy — do not loop \`amc auth repair\`.`;
+  }
+  return `AMC session repair is required (${stage}); run \`amc auth repair --listing-url <official AMC theater URL> --browser-channel chrome --json\` (or --browser-executable/--cdp-url)`;
 }
 
 /**
@@ -321,7 +337,7 @@ export class AmcRuntime {
       if (!browser) {
         throw new AmcSessionRepairRequiredError("listing-url-required");
       }
-      await this.manager.refreshWith(browser);
+      await this.runExplicitRepair(browser);
       return;
     }
     if (options?.listingUrl) this.admissionListingUrl = options.listingUrl;
@@ -329,7 +345,41 @@ export class AmcRuntime {
     const refresher = browser
       ? new DirectFirstAmcSessionRefresher(direct, browser)
       : new DirectOnlySessionRefresher(direct);
-    await this.manager.refreshWith(refresher);
+    await this.runExplicitRepair(refresher);
+  }
+
+  /**
+   * Run an explicit repair through the manager and translate admission-phase
+   * failures into the stable, actionable AmcSessionRepairRequiredError. This is
+   * the explicit repair choke point, so a browser-trust failure (jsd never
+   * settled) or a post-export direct-canary failure (challenge / auth reject /
+   * TLS or network block) becomes a typed repair-required outcome instead of a
+   * raw AMC_CHALLENGE / EPROTO. The manager only persists after the canary
+   * passes, so the previous session is untouched on every failure. Errors that
+   * are already typed repair-required (e.g. from DirectOnly) pass through.
+   */
+  private async runExplicitRepair(refresher: {
+    refresh(previous: AmcSession | null): Promise<AmcSession>;
+  }): Promise<void> {
+    try {
+      await this.manager.refreshWith(refresher);
+    } catch (error) {
+      if (error instanceof AmcSessionRepairRequiredError) throw error;
+      if (error instanceof BrowserRefreshUnavailableError) {
+        // The browser could not produce a trusted export (jsd never settled,
+        // navigation/transport, or a failed cookie export).
+        throw new AmcSessionRepairRequiredError("browser-trust");
+      }
+      if (
+        error instanceof AmcChallengeError ||
+        error instanceof AmcAuthRejectedError ||
+        isTransportLevelFailure(error)
+      ) {
+        // The post-export direct canary rejected the freshly exported jar.
+        throw new AmcSessionRepairRequiredError("post-repair-canary");
+      }
+      throw error;
+    }
   }
 
   withAuthenticatedRead<T>(

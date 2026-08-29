@@ -5,6 +5,10 @@ import {
   sanitizePeetFingerprint,
 } from "../../../client/fingerprint";
 import {
+  AMC_ACCESS_CHECK_DOCUMENT,
+  AMC_ACCESS_CHECK_OPERATION,
+} from "../../../client/auth-probe";
+import {
   AmcBrowserRefresher,
   BrowserRefreshUnavailableError,
 } from "../../../client/browser-refresh";
@@ -20,8 +24,59 @@ import {
 const AMC_ORIGIN = "https://www.amctheatres.com";
 const AMC_GRAPH_ORIGIN = "https://graph.amctheatres.com";
 const DEFAULT_TIMEOUT_MS = 190_000;
+// The settlement loop must outlast a real Cloudflare jsd interstitial: ~40s of
+// conservative polling (30 attempts × ~1.3s) before giving up, well within the
+// overall browser budget.
 const DEFAULT_ADMISSION_ATTEMPTS = 30;
-const DEFAULT_ADMISSION_INTERVAL_MS = 500;
+const DEFAULT_ADMISSION_INTERVAL_MS = 1_300;
+
+/**
+ * Browser-side AccessCheck flags. Computed inside the browser context so the
+ * response body/cookies never cross into Node; only these small booleans do.
+ */
+interface BrowserAccessCheck {
+  status: number;
+  hasData: boolean;
+  hasErrors: boolean;
+  challenge: boolean;
+}
+
+/**
+ * In-browser AccessCheck: POST the canonical harmless GraphQL AccessCheck to
+ * the graph origin from the SAME context/egress and reduce the response to
+ * small non-secret booleans. Success proves the anti-bot layer (Cloudflare jsd)
+ * has settled and the graph origin returns real JSON — not a 403 challenge —
+ * BEFORE any cookie is exported. The response body is never returned or logged.
+ */
+const BROWSER_ACCESS_CHECK_SCRIPT = `(async () => {
+  try {
+    const response = await fetch(${JSON.stringify(`${AMC_GRAPH_ORIGIN}/`)}, {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json", accept: "*/*" },
+      body: JSON.stringify({
+        operationName: ${JSON.stringify(AMC_ACCESS_CHECK_OPERATION)},
+        query: ${JSON.stringify(AMC_ACCESS_CHECK_DOCUMENT)},
+        variables: {},
+      }),
+    });
+    const text = await response.text();
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    let hasData = false;
+    let hasErrors = false;
+    if (contentType.indexOf("application/json") !== -1) {
+      try {
+        const parsed = JSON.parse(text);
+        hasData = !!parsed && typeof parsed === "object" && parsed.data != null;
+        hasErrors = !!parsed && Array.isArray(parsed.errors) && parsed.errors.length > 0;
+      } catch (_) {}
+    }
+    const challenge = /just a moment|cf-chl|challenge-platform|queue-it|attention required/i.test(text);
+    return { status: response.status, hasData: hasData, hasErrors: hasErrors, challenge: challenge };
+  } catch (_) {
+    return { status: 0, hasData: false, hasErrors: false, challenge: false };
+  }
+})()`;
 
 /** Cookie domains this adapter is permitted to export. */
 const AMC_COOKIE_DOMAINS = new Set([
@@ -95,6 +150,17 @@ export interface PlaywrightAmcBrowserRefresherOptions {
    * in the same context and reading the JSON body.
    */
   fingerprintFetcher?: (workspace: PlaywrightWorkspace) => Promise<unknown>;
+  /**
+   * Require a successful browser-side GraphQL AccessCheck (proving Cloudflare
+   * jsd settled) before exporting cookies (default true). Disabling it is for
+   * advanced/testing only and is unsafe against real anti-bot interstitials.
+   */
+  requireBrowserGraphTrust?: boolean;
+  /**
+   * Test/advanced seam returning the browser-side AccessCheck flags. Defaults
+   * to running {@link BROWSER_ACCESS_CHECK_SCRIPT} in the listing page.
+   */
+  browserTrustFetcher?: (page: PlaywrightPage) => Promise<BrowserAccessCheck>;
 }
 
 /**
@@ -115,6 +181,10 @@ export class PlaywrightAmcBrowserRefresher implements AmcBrowserRefresher {
   private readonly fingerprintFetcher?: (
     workspace: PlaywrightWorkspace,
   ) => Promise<unknown>;
+  private readonly requireBrowserGraphTrust: boolean;
+  private readonly browserTrustFetcher?: (
+    page: PlaywrightPage,
+  ) => Promise<BrowserAccessCheck>;
 
   constructor(options: PlaywrightAmcBrowserRefresherOptions) {
     this.runtime = options.runtime;
@@ -132,6 +202,8 @@ export class PlaywrightAmcBrowserRefresher implements AmcBrowserRefresher {
     this.signal = options.signal;
     this.captureFingerprint = options.captureFingerprint ?? true;
     this.fingerprintFetcher = options.fingerprintFetcher;
+    this.requireBrowserGraphTrust = options.requireBrowserGraphTrust ?? true;
+    this.browserTrustFetcher = options.browserTrustFetcher;
   }
 
   async refresh(
@@ -156,7 +228,7 @@ export class PlaywrightAmcBrowserRefresher implements AmcBrowserRefresher {
             await workspace.dispose();
             throw new BrowserOperationTimeoutError("timeout");
           }
-          return this.runRefresh(workspace);
+          return this.runRefresh(workspace, budgetSignal);
         },
         { timeoutMs: this.timeoutMs, signal },
       );
@@ -178,6 +250,7 @@ export class PlaywrightAmcBrowserRefresher implements AmcBrowserRefresher {
 
   private async runRefresh(
     workspace: PlaywrightWorkspace,
+    signal?: AbortSignal,
   ): Promise<AmcSession> {
     let page: PlaywrightPage;
     try {
@@ -190,8 +263,20 @@ export class PlaywrightAmcBrowserRefresher implements AmcBrowserRefresher {
       throw new BrowserRefreshUnavailableError("navigation");
     }
 
-    if (!(await this.proveAdmission(page))) {
+    if (!(await this.proveAdmission(page, signal))) {
       throw new BrowserRefreshUnavailableError("semantic");
+    }
+
+    // A 200 listing DOM is NOT sufficient: real Cloudflare jsd can still 403 the
+    // graph origin and static subresources for seconds after the document
+    // renders. Prove a harmless browser-side GraphQL AccessCheck settles from
+    // this same context/egress BEFORE exporting any cookie, so we never persist
+    // a premature session that the direct canary would then reject.
+    if (
+      this.requireBrowserGraphTrust &&
+      !(await this.proveBrowserGraphTrust(page, signal))
+    ) {
+      throw new BrowserRefreshUnavailableError("browser-trust");
     }
 
     // Self-align the direct-transport fingerprint from the SAME browser/context
@@ -248,8 +333,12 @@ export class PlaywrightAmcBrowserRefresher implements AmcBrowserRefresher {
     }
   }
 
-  private async proveAdmission(page: PlaywrightPage): Promise<boolean> {
+  private async proveAdmission(
+    page: PlaywrightPage,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
     for (let attempt = 0; attempt < this.admissionAttempts; attempt++) {
+      if (signal?.aborted) throw new BrowserOperationTimeoutError("aborted");
       let signals: AdmissionSignals | null = null;
       try {
         signals = await page.evaluate<AdmissionSignals>(ADMISSION_SCRIPT);
@@ -266,6 +355,43 @@ export class PlaywrightAmcBrowserRefresher implements AmcBrowserRefresher {
         signals &&
         signals.allowedOrigin === true &&
         signals.movieSections > 0
+      ) {
+        return true;
+      }
+      if (attempt < this.admissionAttempts - 1) {
+        await page.waitForTimeout(this.admissionIntervalMs);
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Bounded quiet-settlement loop: poll the harmless browser-side GraphQL
+   * AccessCheck until it returns a real 200 JSON `data` response with no errors
+   * and no challenge markers, or the attempt budget is exhausted. It never
+   * re-navigates and never hammers subresources — one AccessCheck per interval.
+   * Respects the AbortSignal between attempts.
+   */
+  private async proveBrowserGraphTrust(
+    page: PlaywrightPage,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    for (let attempt = 0; attempt < this.admissionAttempts; attempt++) {
+      if (signal?.aborted) throw new BrowserOperationTimeoutError("aborted");
+      let check: BrowserAccessCheck | null = null;
+      try {
+        check = await (this.browserTrustFetcher
+          ? this.browserTrustFetcher(page)
+          : page.evaluate<BrowserAccessCheck>(BROWSER_ACCESS_CHECK_SCRIPT));
+      } catch {
+        check = null;
+      }
+      if (
+        check &&
+        check.status === 200 &&
+        check.hasData === true &&
+        check.hasErrors === false &&
+        check.challenge === false
       ) {
         return true;
       }

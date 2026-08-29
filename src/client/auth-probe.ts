@@ -15,13 +15,21 @@ const GRAPHQL_URL = `${AMC_GRAPH_ORIGIN}/`;
  * theater-specific SSR listing (which carried listing-page auth semantics). It reads
  * no wallet, order, or personal data.
  */
-const AUTH_CANARY_DOCUMENT = `query AmcAuthCanary {
+/**
+ * The canonical AccessCheck operation name and document. Exported so the
+ * explicit browser-repair path can run the SAME harmless GraphQL AccessCheck
+ * from inside the browser context (to prove the anti-bot layer has settled)
+ * rather than inventing a second contract.
+ */
+export const AMC_ACCESS_CHECK_OPERATION = "AmcAuthCanary";
+export const AMC_ACCESS_CHECK_DOCUMENT = `query AmcAuthCanary {
   viewer {
     user {
       __typename
     }
   }
 }`;
+const AUTH_CANARY_DOCUMENT = AMC_ACCESS_CHECK_DOCUMENT;
 
 export interface AmcGraphAuthProbeOptions {
   transport: Transport;

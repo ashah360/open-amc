@@ -43,12 +43,15 @@ amc doctor --json
 - Ordinary reads never open a browser. Only the explicit `amc auth repair`
   command can escalate to one — either via `--listing-url` (built-in
   Playwright wiring) or via a deliberately configured `browserRepair`
-  capability module. Any read whose bounded direct admission cannot establish a
-  usable session — an interactive challenge, a typed admission failure, or a
-  TLS/network block of the admission requests themselves — fails with the one
-  stable code `AMC_SESSION_REPAIR_REQUIRED`; that code is the only auth-repair
-  trigger. Errors after a validated session keep their own typed/raw codes and
-  are not an auth problem.
+  capability module. When the bounded direct Queue-it admission phase cannot
+  establish a usable session — an interactive challenge, a typed admission
+  failure, or a TLS/network block of those admission requests — it fails with
+  the stable code `AMC_SESSION_REPAIR_REQUIRED`, the only auth-repair trigger.
+  Outside that admission phase the guarantee does not hold: a raw transport/TLS
+  error (e.g. `EPROTO`) can still surface directly from a read, and any error
+  after a validated session keeps its own typed/raw code. Treat a bare
+  transport error on a read the same way — re-run once, then run `amc auth
+  repair` — but do not assume every such error is pre-mapped.
 
 ## The two purchase paths (both start with one cart)
 
@@ -118,6 +121,17 @@ installed Chrome/Chromium you select (`--browser-channel`,
 Success is only reported after the direct read canary validates the exported
 session. Retry policy: repair once, re-run the failed read once, then stop and
 report.
+
+Browser repair is one bounded operation: after the listing renders it runs a
+harmless browser-side GraphQL AccessCheck and waits (up to ~40s) for the
+anti-bot layer (Cloudflare jsd) to settle before exporting cookies, so a
+premature 200 listing never yields a broken session. If the browser can't
+establish trust, or the post-export direct canary is still challenged/blocked,
+repair fails with `AMC_SESSION_REPAIR_REQUIRED` (stage `browser-trust` or
+`post-repair-canary`) — never a raw `AMC_CHALLENGE`. The fix is to use an
+ordinary, non-headless Chrome profile you already use on amctheatres.com, or a
+different egress/proxy; do **not** loop `amc auth repair`, which just re-hits
+the same wall.
 
 Explicit browser repair also self-aligns the direct transport fingerprint:
 after admission it reads the browser's own TLS/H2/header signature from the

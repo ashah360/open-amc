@@ -5,7 +5,7 @@ const DEFAULT_TIMEOUT_MS = 190_000;
 const MAX_RESULT_BYTES = 4 * 1024 * 1024;
 
 export type BrowserRefreshStage =
-  "transport" | "navigation" | "semantic" | "cookie-export";
+  "transport" | "navigation" | "semantic" | "browser-trust" | "cookie-export";
 
 export class BrowserRefreshUnavailableError extends Error {
   readonly code = "AMC_BROWSER_REFRESH_UNAVAILABLE";

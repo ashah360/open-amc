@@ -4,7 +4,11 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FileSessionStore } from "../src/auth-session";
 import { RequestInput, ResponseOutput, Transport } from "../src/transport";
-import { AMC_SESSION_KEY, AmcRuntime } from "../src/client/runtime";
+import {
+  AMC_SESSION_KEY,
+  AmcRuntime,
+  AmcSessionRepairRequiredError,
+} from "../src/client/runtime";
 import {
   AmcSession,
   decodeAmcSession,
@@ -14,7 +18,10 @@ import { PlaywrightAmcBrowserRefresher } from "../src/capabilities/browser/playw
 import type { PlaywrightBrowserRuntime } from "../src/capabilities/browser/playwright";
 import { runAmcCli } from "../src/cli";
 import type { AmcClient } from "../src/client";
-import type { AmcBrowserRefresher } from "../src/client/browser-refresh";
+import {
+  AmcBrowserRefresher,
+  BrowserRefreshUnavailableError,
+} from "../src/client/browser-refresh";
 import { syntheticListingHtml } from "./fixtures";
 
 class QueueTransport implements Transport {
@@ -163,6 +170,104 @@ describe("explicit repair with a command-local browser refresher", () => {
       runtime.repairSession({ browserRefresher: refresher }),
     ).rejects.toThrow();
     expect(refresher.calls).toBe(1);
+    expect(await store.load(AMC_SESSION_KEY)).toEqual(original);
+  });
+
+  it("maps a browser-trust failure to a typed AMC_SESSION_REPAIR_REQUIRED and saves nothing", async () => {
+    const store = await newStore();
+    const original = encodeAmcSession(session("stale"));
+    await store.save(AMC_SESSION_KEY, original);
+    // The browser could not establish trust (jsd never settled).
+    const refresher = new FakeBrowserRefresher(
+      new BrowserRefreshUnavailableError("browser-trust"),
+    );
+    const transport = new QueueTransport([
+      htmlResponse("<title>Just a moment... Cloudflare</title>", 403),
+    ]);
+    const runtime = new AmcRuntime({ transport, store });
+
+    const failure = await runtime
+      .repairSession({
+        browserRefresher: refresher,
+        listingUrl:
+          "https://www.amctheatres.com/movie-theatres/new-york-city/amc-empire-25/showtimes",
+      })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AmcSessionRepairRequiredError);
+    expect(failure).toMatchObject({
+      code: "AMC_SESSION_REPAIR_REQUIRED",
+      stage: "browser-trust",
+    });
+    expect((failure as Error).message).toMatch(
+      /non-headless|different egress/i,
+    );
+    expect((failure as Error).message).not.toMatch(/AMC_CHALLENGE/);
+    expect(await store.load(AMC_SESSION_KEY)).toEqual(original);
+  });
+
+  it("maps a post-export direct challenge to typed repair-required, not raw AMC_CHALLENGE", async () => {
+    const store = await newStore();
+    const original = encodeAmcSession(session("stale"));
+    await store.save(AMC_SESSION_KEY, original);
+    const refresher = new FakeBrowserRefresher(session("browser-fresh"));
+    const transport = new QueueTransport([
+      // Direct admission target isn't a Queue-it 302 -> browser fallback...
+      htmlResponse("<html>plain listing</html>"),
+      // ...then the post-export direct canary still hits a challenge.
+      htmlResponse("<title>Just a moment... Cloudflare</title>", 403),
+    ]);
+    const runtime = new AmcRuntime({ transport, store });
+
+    const failure = await runtime
+      .repairSession({
+        browserRefresher: refresher,
+        listingUrl:
+          "https://www.amctheatres.com/movie-theatres/new-york-city/amc-empire-25/showtimes",
+      })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AmcSessionRepairRequiredError);
+    expect(failure).toMatchObject({
+      code: "AMC_SESSION_REPAIR_REQUIRED",
+      stage: "post-repair-canary",
+    });
+    expect(await store.load(AMC_SESSION_KEY)).toEqual(original);
+  });
+
+  it("maps a post-export transport (EPROTO) failure to typed repair-required", async () => {
+    const store = await newStore();
+    const original = encodeAmcSession(session("stale"));
+    await store.save(AMC_SESSION_KEY, original);
+    const refresher = new FakeBrowserRefresher(session("browser-fresh"));
+    const eproto = Object.assign(
+      new Error("write EPROTO ... TLS fatal alert"),
+      { code: "EPROTO" },
+    );
+    class EprotoTransport implements Transport {
+      readonly name = "eproto";
+      calls = 0;
+      async request(_input: RequestInput): Promise<ResponseOutput> {
+        this.calls += 1;
+        // Direct admission target (non-302 -> browser fallback); the
+        // post-export canary then dies with a TLS fatal.
+        if (this.calls === 1) return htmlResponse("<html>plain listing</html>");
+        throw eproto;
+      }
+    }
+    const transport = new EprotoTransport();
+    const runtime = new AmcRuntime({ transport, store });
+
+    const failure = await runtime
+      .repairSession({
+        browserRefresher: refresher,
+        listingUrl:
+          "https://www.amctheatres.com/movie-theatres/new-york-city/amc-empire-25/showtimes",
+      })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AmcSessionRepairRequiredError);
+    expect(failure).toMatchObject({ stage: "post-repair-canary" });
     expect(await store.load(AMC_SESSION_KEY)).toEqual(original);
   });
 

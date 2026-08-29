@@ -269,6 +269,25 @@ Add `--json` to any non-help command invocation for machine-readable output
 (help/usage output is plain text and exempt from the JSON envelope). See
 `.env.example` for optional configuration.
 
+### Session storage and session repair
+
+The CLI persists the AMC session jar in a private (mode-0600) file. By default
+it lives under your OS home directory; set `AMC_SESSION_ROOT` to an absolute
+path to store it elsewhere (e.g. a dedicated per-agent runtime directory). The
+value is a path only — no secrets — and `amc doctor --json` reports just whether
+it is configured, never its value.
+
+Session repair is explicit and bounded. `amc auth repair --listing-url <official
+AMC theater URL> [--browser-channel chrome | --browser-executable <path> |
+--cdp-url <url>]` runs exactly one repair: it clears admission in the browser,
+waits for the anti-bot layer to settle (a browser-side GraphQL AccessCheck),
+then exports cookies and validates them with a direct canary before persisting.
+It is **one bounded operation, not a retry loop.** If it returns
+`AMC_SESSION_REPAIR_REQUIRED` (stage `browser-trust`/`post-repair-canary`), the
+browser or egress could not clear AMC's anti-bot layer — use an ordinary,
+non-headless Chrome profile you already use on amctheatres.com, or a different
+egress/proxy, rather than repeating the command.
+
 ### JSON output contract
 
 With `--json` (accepted before or after the subcommand), every command

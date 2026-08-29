@@ -101,7 +101,13 @@ valid session) are not fixed by repair. If a read fails with
    loops.
 
 Success is only reported after the direct read canary validates the repaired
-session; a browser page rendering is not success by itself.
+session; a browser page rendering is not success by itself. Repair first waits
+(one bounded operation, up to ~40s) for a browser-side GraphQL AccessCheck to
+settle before exporting cookies. If it fails with `AMC_SESSION_REPAIR_REQUIRED`
+(stage `browser-trust` or `post-repair-canary`), the browser/egress could not
+clear the anti-bot layer: switch to an ordinary non-headless Chrome profile you
+already use on amctheatres.com, or a different egress — do not loop `auth
+repair`.
 
 Explicit browser repair also self-aligns the direct-transport fingerprint (it
 reads the browser's own signature from the fixed `https://tls.peet.ws/api/all`

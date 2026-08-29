@@ -78,6 +78,13 @@ function refresherFor(
     admissionAttempts?: number;
     captureFingerprint?: boolean;
     fingerprintFetcher?: () => Promise<unknown>;
+    requireBrowserGraphTrust?: boolean;
+    browserTrustFetcher?: () => Promise<{
+      status: number;
+      hasData: boolean;
+      hasErrors: boolean;
+      challenge: boolean;
+    }>;
   } = {},
 ) {
   const runtime = connectionBrowser
@@ -99,8 +106,33 @@ function refresherFor(
     ...(overrides.fingerprintFetcher
       ? { fingerprintFetcher: overrides.fingerprintFetcher }
       : {}),
+    // Existing behavioral tests focus on admission/cleanup/scoping, so the
+    // browser-trust gate defaults to an immediate success here; the dedicated
+    // settlement tests below drive it explicitly.
+    requireBrowserGraphTrust: overrides.requireBrowserGraphTrust ?? true,
+    browserTrustFetcher:
+      overrides.browserTrustFetcher ??
+      (async () => ({
+        status: 200,
+        hasData: true,
+        hasErrors: false,
+        challenge: false,
+      })),
   });
 }
+
+const TRUST_OK = {
+  status: 200,
+  hasData: true,
+  hasErrors: false,
+  challenge: false,
+};
+const TRUST_CHALLENGED = {
+  status: 403,
+  hasData: false,
+  hasErrors: false,
+  challenge: true,
+};
 
 function syntheticPeetCapture(): Record<string, unknown> {
   return {
@@ -153,6 +185,78 @@ describe("PlaywrightAmcBrowserRefresher", () => {
 
     const page = context.createdPages[0]!;
     expect(page.gotos[0]?.url).toContain("amctheatres.com");
+  });
+
+  it("waits for browser-side GraphQL trust to settle before exporting cookies", async () => {
+    const context = new FakePlaywrightContext({
+      cookies: [AMC_COOKIE],
+      pageOptions: { evaluateResult: ADMITTED },
+    });
+    // SSR admits immediately, but the graph AccessCheck is challenged twice
+    // (Cloudflare jsd still settling) before it finally returns real JSON.
+    const trust = [TRUST_CHALLENGED, TRUST_CHALLENGED, TRUST_OK];
+    let trustCalls = 0;
+    let fingerprintCalledAfterTrust = false;
+    const session = await refresherFor(context, undefined, {
+      admissionAttempts: 5,
+      captureFingerprint: true,
+      browserTrustFetcher: async () => trust[trustCalls++] ?? TRUST_OK,
+      fingerprintFetcher: async () => {
+        // Fingerprint capture must happen only once trust has settled.
+        fingerprintCalledAfterTrust = trustCalls >= 3;
+        return syntheticPeetCapture();
+      },
+    }).refresh();
+
+    expect(trustCalls).toBe(3);
+    // Cookies were exported exactly once, only after trust settled.
+    expect(context.cookieUrlArgs).toHaveLength(1);
+    expect(fingerprintCalledAfterTrust).toBe(true);
+    expect(session.fingerprint?.name).toMatch(/^amc-fp-[0-9a-f]{16}$/);
+    expect(session.cookies.length).toBeGreaterThan(0);
+  });
+
+  it("fails typed and exports nothing when browser trust never settles", async () => {
+    const context = new FakePlaywrightContext({
+      cookies: [AMC_COOKIE],
+      pageOptions: { evaluateResult: ADMITTED },
+    });
+    const failure = await refresherFor(context, undefined, {
+      admissionAttempts: 3,
+      captureFingerprint: true,
+      browserTrustFetcher: async () => TRUST_CHALLENGED,
+      fingerprintFetcher: async () => syntheticPeetCapture(),
+    })
+      .refresh()
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(BrowserRefreshUnavailableError);
+    expect(failure).toMatchObject({ stage: "browser-trust" });
+    // No cookie export happened, and the created page was disposed.
+    expect(context.cookieUrlArgs).toHaveLength(0);
+    expect(context.createdPages.every((p) => p.closed)).toBe(true);
+  });
+
+  it("aborts the browser-trust settlement loop on an aborted signal", async () => {
+    const context = new FakePlaywrightContext({
+      cookies: [AMC_COOKIE],
+      pageOptions: { evaluateResult: ADMITTED },
+    });
+    const controller = new AbortController();
+    const failure = await refresherFor(context, undefined, {
+      admissionAttempts: 50,
+      browserTrustFetcher: async () => {
+        controller.abort();
+        return TRUST_CHALLENGED;
+      },
+    })
+      .refresh(null, { signal: controller.signal })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(BrowserOperationTimeoutError);
+    expect(failure).toMatchObject({ reason: "aborted" });
+    expect(context.cookieUrlArgs).toHaveLength(0);
+    expect(context.createdPages.every((p) => p.closed)).toBe(true);
   });
 
   it("captures and attaches a sanitized fingerprint after admission", async () => {
