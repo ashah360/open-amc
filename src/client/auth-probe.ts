@@ -1,10 +1,11 @@
-import { Transport } from "../transport";
+import { ResponseOutput, Transport } from "../transport";
 import {
   AmcAuthRejectedError,
   AmcChallengeError,
   AmcHttpError,
 } from "./client";
 import { AMC_GRAPH_ORIGIN, AMC_ORIGIN } from "./session";
+import { isTransientResponse, isTransientTransportThrow } from "./transient";
 
 const GRAPHQL_URL = `${AMC_GRAPH_ORIGIN}/`;
 
@@ -49,25 +50,7 @@ export class AmcGraphAuthProbe {
     if (!cookie.trim()) {
       throw new AmcAuthRejectedError("AMC session has no graph cookies");
     }
-    const response = await this.options.transport.request({
-      method: "POST",
-      url: GRAPHQL_URL,
-      headers: {
-        accept: "*/*",
-        "content-type": "application/json",
-        origin: AMC_ORIGIN,
-        referer: `${AMC_ORIGIN}/`,
-        cookie,
-      },
-      body: JSON.stringify({
-        operationName: "AmcAuthCanary",
-        query: AUTH_CANARY_DOCUMENT,
-        variables: {},
-      }),
-      verifyTLS: true,
-      followRedirect: false,
-      timeoutMs: 45_000,
-    });
+    const response = await this.dispatchWithTransientRetry(cookie);
     if (isChallenge(response.status, response.bodyText)) {
       throw new AmcChallengeError("AMC GraphQL returned an anti-bot challenge");
     }
@@ -90,6 +73,51 @@ export class AmcGraphAuthProbe {
       throw new AmcAuthRejectedError("AMC session is not authenticated");
     }
     await this.options.onSuccessfulRead?.(GRAPHQL_URL, response.setCookies);
+  }
+
+  /**
+   * The canary gets exactly ONE bounded, SAME-session re-dispatch when the
+   * first attempt is the same transient anti-bot/egress class proven for graph
+   * reads (transport TLS/socket/DNS/timeout throw, HTTP 429/5xx, or a 200 whose
+   * body is an interstitial). This prevents a transient interstitial on the
+   * canary from being misread as a genuine challenge/rejection — which would
+   * otherwise escalate an ordinary read/cart into session repair
+   * (`listing-url-required`) for a session that is actually valid. A persistent
+   * transient, a genuine 403 challenge, a 401, or an authenticated failure all
+   * follow the existing classification below unchanged. No browser, no backoff.
+   */
+  private async dispatchWithTransientRetry(
+    cookie: string,
+  ): Promise<ResponseOutput> {
+    const send = () =>
+      this.options.transport.request({
+        method: "POST",
+        url: GRAPHQL_URL,
+        headers: {
+          accept: "*/*",
+          "content-type": "application/json",
+          origin: AMC_ORIGIN,
+          referer: `${AMC_ORIGIN}/`,
+          cookie,
+        },
+        body: JSON.stringify({
+          operationName: "AmcAuthCanary",
+          query: AUTH_CANARY_DOCUMENT,
+          variables: {},
+        }),
+        verifyTLS: true,
+        followRedirect: false,
+        timeoutMs: 45_000,
+      });
+    let first: ResponseOutput;
+    try {
+      first = await send();
+    } catch (error) {
+      if (!isTransientTransportThrow(error)) throw error;
+      return send();
+    }
+    if (isTransientResponse(first)) return send();
+    return first;
   }
 }
 
