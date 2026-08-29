@@ -122,6 +122,13 @@ Success is only reported after the direct read canary validates the exported
 session. Retry policy: repair once, re-run the failed read once, then stop and
 report.
 
+A launched browser (`--browser-channel`/`--browser-executable`) opens
+**visible/headful** by default, which clears AMC's anti-bot layer far more
+reliably than headless. `--headless` is available for advanced/server use but is
+best-effort and is often blocked; on a `browser-trust` failure the guidance
+below applies. `--cdp-url` connects to a Chrome you already launched, so the
+headless/headful choice is yours.
+
 Browser repair is one bounded operation: after the listing renders it runs a
 harmless browser-side GraphQL AccessCheck and waits (up to ~40s) for the
 anti-bot layer (Cloudflare jsd) to settle before exporting cookies, so a

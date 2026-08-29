@@ -96,7 +96,9 @@ valid session) are not fixed by repair. If a read fails with
 `AMC_SESSION_REPAIR_REQUIRED`:
 
 1. `amc auth repair --listing-url "<official theater URL>" --browser-channel
-   chrome --json` (or `--browser-executable <path>` / `--cdp-url <url>`).
+   chrome --json` (or `--browser-executable <path>` / `--cdp-url <url>`). A
+   launched browser opens visible/headful by default (most reliable);
+   `--headless` exists for servers but is best-effort and often blocked.
 2. Re-run the failed read once. If it fails again, stop and report — no retry
    loops.
 

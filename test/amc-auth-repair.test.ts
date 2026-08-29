@@ -16,7 +16,7 @@ import {
 } from "../src/client/session";
 import { PlaywrightAmcBrowserRefresher } from "../src/capabilities/browser/playwright";
 import type { PlaywrightBrowserRuntime } from "../src/capabilities/browser/playwright";
-import { runAmcCli } from "../src/cli";
+import { runAmcCli, builtInRepairConnection } from "../src/cli";
 import type { AmcClient } from "../src/client";
 import {
   AmcBrowserRefresher,
@@ -333,6 +333,7 @@ describe("CLI auth repair wiring", () => {
       channel?: string;
       executablePath?: string;
       cdpUrl?: string;
+      headless?: boolean;
     }) => AmcBrowserRefresher,
   ) {
     const output: string[] = [];
@@ -372,6 +373,49 @@ describe("CLI auth repair wiring", () => {
       listingUrl:
         "https://www.amctheatres.com/movie-theatres/new-york-city/amc-empire-25/showtimes",
     });
+  });
+
+  it("defaults a launched browser to headful (no --headless flag)", async () => {
+    const built = new FakeBrowserRefresher(session());
+    const factory = vi.fn((_options: { headless?: boolean }) => built);
+    const { code } = await run(
+      [
+        "auth",
+        "repair",
+        "--listing-url",
+        "https://www.amctheatres.com/movie-theatres/new-york-city/amc-empire-25/showtimes",
+        "--browser-channel",
+        "chrome",
+        "--json",
+      ],
+      stubClient(),
+      factory,
+    );
+    expect(code).toBe(0);
+    // No headless flag reaches the factory, so the built-in resolver keeps its
+    // visible/headful default.
+    expect(factory.mock.calls[0]![0].headless).toBeUndefined();
+  });
+
+  it("passes --headless through to the browser factory", async () => {
+    const built = new FakeBrowserRefresher(session());
+    const factory = vi.fn((_options: { headless?: boolean }) => built);
+    const { code } = await run(
+      [
+        "auth",
+        "repair",
+        "--listing-url",
+        "https://www.amctheatres.com/movie-theatres/new-york-city/amc-empire-25/showtimes",
+        "--browser-channel",
+        "chrome",
+        "--headless",
+        "--json",
+      ],
+      stubClient(),
+      factory,
+    );
+    expect(code).toBe(0);
+    expect(factory.mock.calls[0]![0].headless).toBe(true);
   });
 
   it("wires --cdp-url through the browser factory to repair", async () => {
@@ -467,5 +511,54 @@ describe("CLI auth repair wiring", () => {
     );
     expect(code).toBe(0);
     expect(factory).not.toHaveBeenCalled();
+  });
+
+  it("documents --headless in `auth repair --help`", async () => {
+    const { code, output } = await run(
+      ["auth", "repair", "--help"],
+      stubClient(),
+    );
+    expect(code).toBe(0);
+    const help = output.join("\n");
+    expect(help).toContain("--headless");
+    expect(help).toMatch(/best-effort|advanced|blocked/i);
+  });
+});
+
+describe("built-in repair connection policy", () => {
+  it("defaults a launched browser to visible/headful", () => {
+    expect(
+      builtInRepairConnection({
+        listingUrl:
+          "https://www.amctheatres.com/movie-theatres/x/amc-y/showtimes",
+        channel: "chrome",
+      }),
+    ).toEqual({ kind: "launch", headless: false, channel: "chrome" });
+  });
+
+  it("opts into headless only when requested", () => {
+    expect(
+      builtInRepairConnection({
+        listingUrl:
+          "https://www.amctheatres.com/movie-theatres/x/amc-y/showtimes",
+        executablePath: "/usr/bin/chromium",
+        headless: true,
+      }),
+    ).toEqual({
+      kind: "launch",
+      headless: true,
+      executablePath: "/usr/bin/chromium",
+    });
+  });
+
+  it("uses the caller-owned CDP connection and ignores launch mode", () => {
+    expect(
+      builtInRepairConnection({
+        listingUrl:
+          "https://www.amctheatres.com/movie-theatres/x/amc-y/showtimes",
+        cdpUrl: "http://127.0.0.1:9222",
+        headless: true,
+      }),
+    ).toEqual({ kind: "cdp", endpointURL: "http://127.0.0.1:9222" });
   });
 });

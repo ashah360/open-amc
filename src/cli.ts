@@ -7,6 +7,7 @@ import { createAmcClient, AmcClient, AmcClientConfig } from "./client";
 import { FileSessionStore } from "./auth-session";
 import { HelloTransport, registerHelloProfileFromPeet } from "./transport";
 import { AmcBrowserRefresher } from "./client/browser-refresh";
+import type { PlaywrightConnection } from "./capabilities/browser/playwright/runtime";
 import { availableOrdinarySeats } from "./client/seat-layout";
 import { adoptPersistedFingerprint } from "./client/runtime";
 import {
@@ -49,6 +50,13 @@ export interface BuiltInBrowserRepairOptions {
   executablePath?: string;
   /** Connect to an already-running Chrome over CDP instead of launching. */
   cdpUrl?: string;
+  /**
+   * Launch a headless browser instead of the default visible/headful one.
+   * Advanced/server best-effort only: live evidence shows headless is far more
+   * likely to be blocked by AMC's anti-bot layer, so the CLI default is
+   * headful. Ignored for the caller-owned `--cdp-url` connection.
+   */
+  headless?: boolean;
 }
 
 export interface AmcCliDependencies {
@@ -890,6 +898,10 @@ function buildAuthCommands(
       "--cdp-url <url>",
       "connect to an already-running Chrome over CDP instead of launching",
     )
+    .option(
+      "--headless",
+      "launch headless (advanced/server, best-effort; more likely blocked than the default visible Chrome)",
+    )
     .description(
       "Explicitly repair the session (direct-only unless --listing-url or a browser capability is wired)",
     )
@@ -900,6 +912,7 @@ function buildAuthCommands(
           browserChannel?: string;
           browserExecutable?: string;
           cdpUrl?: string;
+          headless?: boolean;
         },
         command: Command,
       ) => {
@@ -929,6 +942,7 @@ function buildAuthCommands(
                   ? { executablePath: options.browserExecutable }
                   : {}),
                 ...(options.cdpUrl ? { cdpUrl: options.cdpUrl } : {}),
+                ...(options.headless ? { headless: true } : {}),
               });
               await client.auth.repair({
                 browserRepair,
@@ -958,21 +972,36 @@ function builtInPlaywrightBrowserRepair(
     "./capabilities/browser/playwright",
   ) as typeof import("./capabilities/browser/playwright");
   const runtime = new adapter.PlaywrightBrowserRuntime(
-    options.cdpUrl
-      ? { kind: "cdp", endpointURL: options.cdpUrl }
-      : {
-          kind: "launch",
-          headless: false,
-          ...(options.channel ? { channel: options.channel } : {}),
-          ...(options.executablePath
-            ? { executablePath: options.executablePath }
-            : {}),
-        },
+    builtInRepairConnection(options),
   );
   return new adapter.PlaywrightAmcBrowserRefresher({
     runtime,
     listingUrl: options.listingUrl,
   });
+}
+
+/**
+ * Pure resolver for the built-in repair's Playwright connection, extracted so
+ * the launch/headless policy is testable without a real browser. A caller-owned
+ * `--cdp-url` connection is used as-is (launch mode, including `--headless`, is
+ * irrelevant to it). A launched browser defaults to VISIBLE/headful because
+ * live evidence shows headless is far more likely to be blocked by AMC's
+ * anti-bot layer; `--headless` opts into best-effort headless.
+ */
+export function builtInRepairConnection(
+  options: BuiltInBrowserRepairOptions,
+): PlaywrightConnection {
+  if (options.cdpUrl) {
+    return { kind: "cdp", endpointURL: options.cdpUrl };
+  }
+  return {
+    kind: "launch",
+    headless: options.headless === true,
+    ...(options.channel ? { channel: options.channel } : {}),
+    ...(options.executablePath
+      ? { executablePath: options.executablePath }
+      : {}),
+  };
 }
 
 async function snapshotFor(

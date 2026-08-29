@@ -241,7 +241,7 @@ module (`AMC_CAPABILITY_MODULE`): a CommonJS module exporting a no-argument
 
 ```text
 amc doctor
-amc auth status | clear | bootstrap --from <file|-> | repair [--listing-url <url>] [--browser-channel c] [--browser-executable p] [--cdp-url u]
+amc auth status | clear | bootstrap --from <file|-> | repair [--listing-url <url>] [--browser-channel c] [--browser-executable p] [--cdp-url u] [--headless]
 amc theater resolve --url <official amctheatres.com theater URL>
 amc showtimes --theater-url <official AMC theater URL> --date YYYY-MM-DD [--movie TEXT] [--format TEXT]
 amc seats <showtime-id...> [--available-only]
@@ -279,14 +279,20 @@ it is configured, never its value.
 
 Session repair is explicit and bounded. `amc auth repair --listing-url <official
 AMC theater URL> [--browser-channel chrome | --browser-executable <path> |
---cdp-url <url>]` runs exactly one repair: it clears admission in the browser,
-waits for the anti-bot layer to settle (a browser-side GraphQL AccessCheck),
-then exports cookies and validates them with a direct canary before persisting.
-It is **one bounded operation, not a retry loop.** If it returns
-`AMC_SESSION_REPAIR_REQUIRED` (stage `browser-trust`/`post-repair-canary`), the
-browser or egress could not clear AMC's anti-bot layer — use an ordinary,
-non-headless Chrome profile you already use on amctheatres.com, or a different
-egress/proxy, rather than repeating the command.
+--cdp-url <url>] [--headless]` runs exactly one repair: it clears admission in
+the browser, waits for the anti-bot layer to settle (a browser-side GraphQL
+AccessCheck), then exports cookies and validates them with a direct canary
+before persisting. It is **one bounded operation, not a retry loop.**
+
+A launched browser opens **visible/headful by default**, which clears AMC's
+anti-bot layer far more reliably than headless; `--headless` is available for
+advanced/server use but is best-effort and often blocked. `--cdp-url` attaches
+to a Chrome you started yourself, so its headless/headful mode is your choice.
+If repair returns `AMC_SESSION_REPAIR_REQUIRED` (stage
+`browser-trust`/`post-repair-canary`), the browser or egress could not clear
+AMC's anti-bot layer — use an ordinary, non-headless Chrome profile you already
+use on amctheatres.com, or a different egress/proxy, rather than repeating the
+command.
 
 ### JSON output contract
 
