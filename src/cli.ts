@@ -958,6 +958,109 @@ function buildAuthCommands(
         );
       },
     );
+
+  program
+    .command("setup")
+    .requiredOption(
+      "--theater-url <url>",
+      "official amctheatres.com theater/showtimes URL (any official AMC theater)",
+    )
+    .option(
+      "--browser-channel <channel>",
+      'installed Chrome/Chromium channel (defaults to visible "chrome" when no browser selector is given)',
+    )
+    .option(
+      "--browser-executable <path>",
+      "explicit Chrome/Chromium executable path",
+    )
+    .option(
+      "--cdp-url <url>",
+      "connect to an already-running Chrome over CDP instead of launching",
+    )
+    .option(
+      "--headless",
+      "launch headless (advanced/server, best-effort; more likely blocked than the default visible Chrome)",
+    )
+    .option(
+      "--date <date>",
+      "optional YYYY-MM-DD: run a harmless showtimes read canary after repair",
+    )
+    .description(
+      "One explicit setup: bounded browser auth repair for a theater, then ready for reads",
+    )
+    .action(
+      async (
+        options: {
+          theaterUrl: string;
+          browserChannel?: string;
+          browserExecutable?: string;
+          cdpUrl?: string;
+          headless?: boolean;
+          date?: string;
+        },
+        command: Command,
+      ) => {
+        await execute(
+          command,
+          async () => {
+            // Validate the theater URL locally before any browser dependency
+            // is touched; the SAME resolved URL drives repair and reads.
+            const resolved = resolveOfficialAmcTheaterUrl(options.theaterUrl);
+            const noSelector =
+              !options.browserChannel &&
+              !options.browserExecutable &&
+              !options.cdpUrl;
+            const browserRepair = createBrowserRepair({
+              listingUrl: resolved.url,
+              // Default to the visible installed Chrome channel: the reliable
+              // path per live evidence. Explicit selectors always win.
+              ...(options.browserChannel
+                ? { channel: options.browserChannel }
+                : noSelector
+                  ? { channel: "chrome" }
+                  : {}),
+              ...(options.browserExecutable
+                ? { executablePath: options.browserExecutable }
+                : {}),
+              ...(options.cdpUrl ? { cdpUrl: options.cdpUrl } : {}),
+              ...(options.headless ? { headless: true } : {}),
+            });
+            // Exactly one bounded explicit repair; success is already gated by
+            // the direct canary before the session persists.
+            await client.auth.repair({
+              browserRepair,
+              listingUrl: resolved.url,
+            });
+            let read: { date: string; showtimes: number } | undefined;
+            if (options.date) {
+              const showtimes = await client.showtimes.list({
+                venue: resolved,
+                date: options.date,
+              });
+              read = { date: options.date, showtimes: showtimes.length };
+            }
+            // Stable, token/path-free success shape.
+            return {
+              kind: "setup",
+              cli: "ready",
+              auth: "valid",
+              theater: {
+                name: resolved.name,
+                slug: resolved.slug,
+                market: resolved.market,
+                url: resolved.url,
+              },
+              ...(read ? { read } : {}),
+              nextCommand: `amc showtimes --theater-url "${resolved.url}" --date YYYY-MM-DD --json`,
+            };
+          },
+          (result) => [
+            `Setup complete for ${String((result.theater as { name: string }).name)}.`,
+            `Next: ${String(result.nextCommand)}`,
+          ],
+        );
+      },
+    );
 }
 
 /**

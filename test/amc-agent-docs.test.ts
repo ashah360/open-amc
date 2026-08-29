@@ -15,6 +15,15 @@ const TEMPLATE = readFileSync(
 const README = readFileSync(path.join(ROOT, "README.md"), "utf8");
 
 describe("agent docs", () => {
+  it("root SKILL.md is byte-identical to the canonical skills/open-amc/SKILL.md", () => {
+    // The canonical source is skills/open-amc/SKILL.md; the repository-root
+    // copy exists so Hermes (raw URL install) and OpenClaw (root discovery on
+    // git/local install) both find it. CI fails on any drift: after editing the
+    // canonical file, run `cp skills/open-amc/SKILL.md SKILL.md`.
+    const root = readFileSync(path.join(ROOT, "SKILL.md"), "utf8");
+    expect(root).toBe(SKILL);
+  });
+
   it("skill has valid frontmatter meeting the Hermes in-repo skill contract", () => {
     const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(SKILL);
     expect(frontmatter).not.toBeNull();

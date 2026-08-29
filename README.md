@@ -15,7 +15,53 @@ CLI, built for agents to operate reliably without hidden context.
 > using this software in accordance with AMC's terms of service and applicable
 > law.
 
-## Install
+## Give this to your agent
+
+Three routes; any one is enough. Human checkout handoff is turnkey — agent-paid
+checkout stays an optional capability you must supply yourself (a card vault is
+never zero-config).
+
+**A. Paste the repo URL with a prompt.** Your agent clones, installs, and reads
+the root `AGENTS.md`/`SKILL.md`:
+
+> Install https://github.com/ashah360/open-amc.git (tag v0.1.2, run
+> `bash install.sh --agent auto`), then run
+> `amc setup --theater-url "<official AMC theater URL>" --json`. After setup,
+> find showtimes and hold my seats, then give me the checkout URL privately.
+
+**B. One installer (Hermes and OpenClaw).** Auditable clone-then-run:
+
+```bash
+git clone --branch v0.1.2 --depth 1 https://github.com/ashah360/open-amc.git
+bash open-amc/install.sh --agent hermes   # or: --agent openclaw | auto
+```
+
+or, as a convenience one-liner:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ashah360/open-amc/v0.1.2/install.sh | bash -s -- --agent hermes
+```
+
+It pins v0.1.2 into `~/.open-amc/app` (override `OPEN_AMC_HOME`), links
+`~/.local/bin/amc` (override `BIN_DIR`), verifies `amc doctor --json`, and
+installs the skill through the platform's native mechanism (Hermes: pinned raw
+`SKILL.md` URL with `--now`; OpenClaw: the local checkout root with
+`--global --as open-amc`). Rerunning safely updates the same install.
+
+**C. One explicit setup, then talk normally.**
+
+```bash
+amc setup --theater-url "https://www.amctheatres.com/movie-theatres/<market>/<amc-...>/showtimes" --json
+```
+
+Then: "find IMAX showtimes tomorrow at my theater, hold E7 and E8, and send me
+the checkout link."
+
+> **Requirements.** Node.js >= 22; a real installed Chrome/Chromium (setup opens
+> a VISIBLE Chrome once — headless is best-effort and often blocked); trusted
+> residential-grade egress. This package is installed from Git, not npm.
+
+## Install (manual)
 
 ```bash
 git clone https://github.com/ashah360/open-amc.git
@@ -240,6 +286,7 @@ module (`AMC_CAPABILITY_MODULE`): a CommonJS module exporting a no-argument
 `@ashah360/open-amc/cli`). See `.env.example` for a synthetic example.
 
 ```text
+amc setup --theater-url <official AMC theater URL> [--browser-channel c] [--browser-executable p] [--cdp-url u] [--headless] [--date YYYY-MM-DD]
 amc doctor
 amc auth status | clear | bootstrap --from <file|-> | repair [--listing-url <url>] [--browser-channel c] [--browser-executable p] [--cdp-url u] [--headless]
 amc theater resolve --url <official amctheatres.com theater URL>

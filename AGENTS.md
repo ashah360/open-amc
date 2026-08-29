@@ -8,17 +8,20 @@ compose their own applications responsibly on top of the public primitives
 (this repo intentionally enables that): keep one fenced commerce writer,
 respect provider limits, and never blind-retry writes.
 
-## Install (public Git)
+## Install (public Git; pinned installer preferred)
 
 ```bash
-git clone https://github.com/ashah360/open-amc.git && cd open-amc
-npm install        # `prepare` builds dist automatically
-node dist/cli.js --help   # or: npm link && amc --help
+git clone --branch v0.1.2 --depth 1 https://github.com/ashah360/open-amc.git
+bash open-amc/install.sh --agent auto   # installs ~/.local/bin/amc + the skill
 ```
 
-Requires Node >= 22. Verify readiness first:
+(Manual alternative: `git clone https://github.com/ashah360/open-amc.git && cd
+open-amc && npm install`, then run `node dist/cli.js ...` or `npm link`.)
+Requires Node >= 22 and, for setup/repair, a real installed Chrome. Then one
+explicit setup (opens a visible Chrome once), and verify readiness:
 
 ```bash
+amc setup --theater-url "<official AMC theater URL>" --json
 amc doctor --json
 ```
 
