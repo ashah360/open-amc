@@ -28,7 +28,10 @@ export class SingleFlightError extends Error {
   readonly code = "AMC_SINGLE_FLIGHT";
 }
 export class UnknownWriteOutcomeError extends Error {
-  readonly code = "AMC_WRITE_OUTCOME_UNKNOWN";
+  // Typed as string so a subclass can specialize it to a more exact stable
+  // code (e.g. a known-token cart hold) while still being an
+  // UnknownWriteOutcomeError for envelope/reconciliation handling.
+  readonly code: string = "AMC_WRITE_OUTCOME_UNKNOWN";
 }
 
 /**
@@ -52,6 +55,25 @@ export class CartCreationOutcomeUnknownError extends UnknownWriteOutcomeError {
     readonly reconciliation: UnknownOutcomeReconciliation,
   ) {
     super(message);
+  }
+}
+
+/**
+ * A CartCreateOrder whose provider order token IS known (the cart EXISTS), but
+ * whose details could not be read back (projection/validation failed after the
+ * token was received). Unlike a truly unknown write, the safe recovery is exact:
+ * inspect or release the known token; never create a second cart. It extends
+ * {@link CartCreationOutcomeUnknownError} so the CLI JSON envelope still carries
+ * `operation: "cart"` and the allowlisted `reconciliation` (now including
+ * `orderToken`), but uses a distinct, non-"unknown" code and message.
+ */
+export class CartHoldWithoutSnapshotError extends CartCreationOutcomeUnknownError {
+  override readonly code = "AMC_CART_HOLD_UNCONFIRMED";
+  constructor(reconciliation: UnknownOutcomeReconciliation) {
+    super(
+      "AMC cart hold was created and its order token is known, but the hold could not be confirmed (its details could not be read back or did not match the request). The cart EXISTS: release it with `amc order release --token <orderToken>` (or `amc checkout reconcile`) using error.reconciliation.orderToken. Do NOT create another cart.",
+      reconciliation,
+    );
   }
 }
 
@@ -302,6 +324,7 @@ export class AmcCommerceService {
           });
         } catch (error) {
           if (knownToken === null) await this.releaseCheckout(binding);
+          else throw this.cartHoldStranded(knownToken, intent);
           throw error;
         }
       }
@@ -383,9 +406,27 @@ export class AmcCommerceService {
             ...(knownToken ? { orderToken: knownToken } : {}),
             updatedAt: this.now().toISOString(),
           });
+          if (knownToken !== null)
+            throw this.cartHoldStranded(knownToken, intent);
           throw error;
         }
       });
+    });
+  }
+
+  /**
+   * Build the typed cart-hold error for a KNOWN provider token whose cart
+   * details could not be read back. Only the safe allowlisted identifiers
+   * surface; the raw provider/projection error is intentionally not carried.
+   */
+  private cartHoldStranded(
+    orderToken: string,
+    intent: CartCreateIntent,
+  ): CartHoldWithoutSnapshotError {
+    return new CartHoldWithoutSnapshotError({
+      orderToken,
+      showtimeId: intent.showtimeId,
+      seatNames: intent.seats.map((seat) => seat.name),
     });
   }
 

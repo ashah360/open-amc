@@ -16,6 +16,7 @@ import {
 } from "./client/theater-url";
 import { createPurchaseSnapshot } from "./commerce/purchase-snapshot";
 import { AmcCheckoutCapabilities } from "./commerce/wiring";
+import { FileCheckoutJournal } from "./commerce/checkout-journal";
 import {
   CheckoutPreview,
   RefundPreview,
@@ -1064,7 +1065,12 @@ async function buildClient(
     ...(capabilities.challengeHandler
       ? { challengeHandler: capabilities.challengeHandler }
       : {}),
-    ...(capabilities.recovery ? { recovery: capabilities.recovery } : {}),
+    // The CLI ALWAYS has a durable cart journal so a cart hold whose token was
+    // received can never be stranded across processes: a capability-supplied
+    // recovery journal wins, otherwise a private FileCheckoutJournal backed by
+    // the same mode-0600 session store is used by default. (The library
+    // `createAmcClient()` stays stateless unless a caller opts in.)
+    recovery: capabilities.recovery ?? new FileCheckoutJournal(store),
   };
   const client = factory({
     transport,
@@ -1359,7 +1365,11 @@ async function doctorReport(
       moduleConfigured: Boolean(process.env.AMC_CAPABILITY_MODULE),
       cardProvider: Boolean(capabilities.cardProvider),
       challengeHandler: Boolean(capabilities.challengeHandler),
-      recovery: Boolean(capabilities.recovery),
+      // The CLI always wires a private durable cart journal (a capability
+      // module may override it), so durable cart recovery is always available
+      // — even with no capability module configured. Reported as a boolean; no
+      // filesystem path is ever surfaced.
+      recovery: true,
       browserRepair: Boolean(capabilities.browserRepair),
       defaultVaultPointer: Boolean(capabilities.defaultVaultPointer),
       defaultReceiptEmail: Boolean(capabilities.defaultReceiptEmail),

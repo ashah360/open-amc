@@ -269,6 +269,19 @@ Add `--json` to any non-help command invocation for machine-readable output
 (help/usage output is plain text and exempt from the JSON envelope). See
 `.env.example` for optional configuration.
 
+### Cart recovery (durable by default in the CLI)
+
+The `amc` CLI journals every cart attempt to a private file under the same
+session store, so a cart hold whose provider order token was received can never
+be stranded — even across separate CLI processes. A capability module's
+`recovery` journal overrides this default; the library `createAmcClient()`
+stays stateless unless you opt in. If `cart create` fails after the provider
+returned a token (the hold exists but its details could not be confirmed), the
+error is `AMC_CART_HOLD_UNCONFIRMED` with
+`reconciliation.orderToken` — release it with
+`amc order release --token <orderToken>` (or `amc checkout reconcile`); never
+create another cart. `amc doctor` reports whether recovery is available.
+
 ### Session storage and session repair
 
 The CLI persists the AMC session jar in a private (mode-0600) file. By default

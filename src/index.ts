@@ -77,6 +77,7 @@ export type {
 } from "./commerce/service";
 export {
   CartCreationOutcomeUnknownError,
+  CartHoldWithoutSnapshotError,
   ChallengePaymentSetupError,
   CheckoutOutcomeUnknownError,
   CheckoutSessionOwnershipError,

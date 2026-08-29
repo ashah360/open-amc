@@ -9,6 +9,7 @@ import type { CartSnapshot } from "../src/commerce/executor";
 import type { CheckoutPreview } from "../src/commerce/service";
 import {
   CartCreationOutcomeUnknownError,
+  CartHoldWithoutSnapshotError,
   CheckoutOutcomeUnknownError,
   RefundOutcomeUnknownError,
   ReleaseOutcomeUnknownError,
@@ -126,6 +127,36 @@ describe("CLI JSON error envelope preserves safe reconciliation context", () => 
       operation: "cart",
       reconciliation: { showtimeId: "900000004", seatNames: ["A2"] },
     });
+  });
+
+  it("surfaces the known order token for a cart hold whose details could not be confirmed", async () => {
+    const client = stubClient({
+      orders: {
+        createCart: vi.fn(async () => {
+          throw new CartHoldWithoutSnapshotError({
+            orderToken: "order-abc",
+            showtimeId: "900000004",
+            seatNames: ["A2"],
+          });
+        }),
+      },
+    });
+    const { code, out } = await run(
+      ["cart", "create", "--showtime", "900000004", "--seat", "A2", "--json"],
+      client,
+    );
+    expect(code).toBe(1);
+    const { error } = singleJsonError(out);
+    expect(error.code).toBe("AMC_CART_HOLD_UNCONFIRMED");
+    expect(error.operation).toBe("cart");
+    expect(error.reconciliation).toEqual({
+      orderToken: "order-abc",
+      showtimeId: "900000004",
+      seatNames: ["A2"],
+    });
+    // An agent can immediately release the exact token; no checkout URL leaks.
+    expect(String(error.message)).toContain("order release --token");
+    expect(JSON.stringify(error)).not.toContain("/purchase");
   });
 
   it("retains the order token when a checkout submit is ambiguous", async () => {

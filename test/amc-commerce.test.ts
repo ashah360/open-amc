@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { FileSessionStore } from "../src/auth-session";
 import {
   AmcCheckoutSession,
   CheckoutSessionOwnershipError,
@@ -42,14 +46,25 @@ import {
 import {
   CheckoutAttempt,
   CheckoutJournal,
+  FileCheckoutJournal,
 } from "../src/commerce/checkout-journal";
 import {
   AmcCommerceService,
+  CartHoldWithoutSnapshotError,
   ConfirmationMismatchError,
   ConsequenceMismatchError,
   SingleFlightError,
   UnknownWriteOutcomeError,
 } from "../src/commerce/service";
+
+const journalRoots: string[] = [];
+afterEach(async () => {
+  await Promise.all(
+    journalRoots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true })),
+  );
+});
 
 describe("AMC captured GraphQL contracts", () => {
   it("preserves exact two-product seat array semantics and exact documents", () => {
@@ -187,17 +202,31 @@ describe("AMC consequential commerce lifecycle", () => {
     expect(executor.createCalls).toBe(0);
   });
 
-  it("fails closed on expired carts and exact total mismatches", async () => {
+  it("fails closed on expired carts and exact total mismatches, surfacing the known token", async () => {
     const executor = new FakeCommerceExecutor();
     const service = serviceWith(executor);
     executor.cart.total = "55.55";
-    await expect(service.createCart(createIntent())).rejects.toBeInstanceOf(
-      ConsequenceMismatchError,
-    );
+    // The cart was created (token known) but its details did not match the
+    // request: fail closed AND surface the token so the hold can be released,
+    // never stranded.
+    const mismatch = await service
+      .createCart(createIntent())
+      .catch((error: unknown) => error);
+    expect(mismatch).toBeInstanceOf(CartHoldWithoutSnapshotError);
+    expect(mismatch).toMatchObject({
+      operation: "cart",
+      reconciliation: { orderToken: executor.cart.orderToken },
+    });
 
     executor.cart.total = "55.56";
     executor.cart.expiresAt = "2030-01-15T08:29:00.000Z";
-    await expect(service.createCart(createIntent())).rejects.toThrow(/expired/);
+    const expired = await service
+      .createCart(createIntent())
+      .catch((error: unknown) => error);
+    expect(expired).toBeInstanceOf(CartHoldWithoutSnapshotError);
+    expect(expired).toMatchObject({
+      reconciliation: { orderToken: executor.cart.orderToken },
+    });
     expect(executor.createCalls).toBe(2);
   });
 
@@ -550,11 +579,13 @@ describe("AMC consequential commerce lifecycle", () => {
     expect(executor.createCalls).toBe(1);
   });
 
-  it("recovers a token persisted before post-create projection failure", async () => {
+  it("throws a typed cart-hold error with the known token when projection fails after token receipt", async () => {
     const executor = new FakeCommerceExecutor();
     const journal = new MemoryCheckoutJournal();
+    // CartCreateOrder succeeds and reports the token, then the projection read
+    // fails — the exact live River East B13/B14 shape.
     executor.reportTokenBeforeError = true;
-    executor.createError = new Error("projection failed after token");
+    executor.createError = new Error("AMC order projection error");
     const service = new AmcCommerceService({
       executor,
       payment: new FakePaymentExecutor(),
@@ -562,20 +593,87 @@ describe("AMC consequential commerce lifecycle", () => {
       now: () => new Date("2030-01-15T08:30:00.000Z"),
     });
 
-    await expect(service.createCart(createIntent())).rejects.toThrow(
-      "projection failed after token",
-    );
+    const failure = await service
+      .createCart(createIntent())
+      .catch((error: unknown) => error);
+
+    // Typed, exact recovery — NOT a generic "unknown outcome".
+    expect(failure).toBeInstanceOf(CartHoldWithoutSnapshotError);
+    expect(failure).toMatchObject({
+      code: "AMC_CART_HOLD_UNCONFIRMED",
+      operation: "cart",
+      reconciliation: {
+        orderToken: executor.cart.orderToken,
+        showtimeId: "900000005",
+        seatNames: ["H7", "H8"],
+      },
+    });
+    expect((failure as Error).message).toContain("release");
+    expect((failure as Error).message).not.toMatch(/unknown/i);
+    // Exactly one cart mutation, and the durable journal holds the token.
+    expect(executor.createCalls).toBe(1);
     expect(journal.record).toMatchObject({
       state: "CART_TOKEN_RECEIVED",
       orderToken: executor.cart.orderToken,
     });
 
+    // A later process/same session can release that exact token with NO second
+    // cart mutation, and the journal terminalizes to RELEASED.
     executor.createError = null;
-    await expect(service.createCart(createIntent())).resolves.toMatchObject({
-      orderToken: executor.cart.orderToken,
-    });
+    await expect(
+      service.releaseCart(executor.cart.orderToken),
+    ).resolves.toEqual({ released: true });
     expect(executor.createCalls).toBe(1);
-    expect(executor.inspectCalls).toBe(1);
+    expect(executor.deleteCalls).toBe(1);
+    expect(journal.record?.state).toBe("RELEASED");
+  });
+
+  it("recovers a stranded token across processes via the default on-disk journal", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "amc-xproc-journal-"));
+    journalRoots.push(root);
+    const now = () => new Date("2030-01-15T08:30:00.000Z");
+
+    // Process 1: a real FileCheckoutJournal (the CLI default) backed by a
+    // FileSessionStore. CartCreateOrder reports the token, then projection
+    // fails -> typed cart-hold error and a durable on-disk journal entry.
+    const executor1 = new FakeCommerceExecutor();
+    executor1.reportTokenBeforeError = true;
+    executor1.createError = new Error("AMC order projection error");
+    const service1 = new AmcCommerceService({
+      executor: executor1,
+      payment: new FakePaymentExecutor(),
+      journal: new FileCheckoutJournal(new FileSessionStore({ root })),
+      now,
+    });
+    const failure = await service1
+      .createCart(createIntent())
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(CartHoldWithoutSnapshotError);
+    expect(
+      (failure as CartHoldWithoutSnapshotError).reconciliation.orderToken,
+    ).toBe(executor1.cart.orderToken);
+    expect(executor1.createCalls).toBe(1);
+
+    // Process 2: a brand-new service + brand-new FileCheckoutJournal over the
+    // SAME store root reads the persisted token and releases it with ZERO cart
+    // mutations, terminalizing the journal.
+    const executor2 = new FakeCommerceExecutor();
+    const journal2 = new FileCheckoutJournal(new FileSessionStore({ root }));
+    const service2 = new AmcCommerceService({
+      executor: executor2,
+      payment: new FakePaymentExecutor(),
+      journal: journal2,
+      now,
+    });
+
+    await expect(
+      service2.releaseCart(executor1.cart.orderToken),
+    ).resolves.toEqual({ released: true });
+    expect(executor2.createCalls).toBe(0);
+    expect(executor2.deleteCalls).toBe(1);
+    expect(
+      (await journal2.loadByOrderToken(executor1.cart.orderToken))?.state,
+    ).toBe("RELEASED");
   });
 
   it("journals one owner-scoped cart release and does not dispatch it twice", async () => {

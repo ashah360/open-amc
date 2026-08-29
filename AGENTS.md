@@ -35,6 +35,12 @@ amc doctor --json
 - **Never retry a failed write blindly.** On `AMC_WRITE_OUTCOME_UNKNOWN`, run
   the matching `reconcile` command; the JSON error carries the safe
   reconciliation identifiers (order token, order number, seats).
+- **A cart hold is never stranded.** The CLI journals cart tokens privately by
+  default (no config needed). If `cart create` fails after the provider issued a
+  token, the error is `AMC_CART_HOLD_UNCONFIRMED` with
+  `reconciliation.orderToken` — the cart EXISTS. Release it with
+  `amc order release --token <orderToken>` (or reconcile); do **not** create
+  another cart.
 - **Stop on 3DS / user-action-required.** Interactive payment challenges are a
   human boundary; report and stop.
 - The `checkoutUrl` returned by `cart create` is **bearer-like**: anyone

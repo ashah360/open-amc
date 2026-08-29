@@ -101,6 +101,9 @@ describe("amc doctor --json", () => {
     expect(doctor.capabilities.browserRepair).toBe(false);
     expect(doctor.capabilities.defaultVaultPointer).toBe(true);
     expect(doctor.capabilities.defaultReceiptEmail).toBe(true);
+    // The CLI always wires a durable cart journal, so recovery is available
+    // even with a capability module present.
+    expect(doctor.capabilities.recovery).toBe(true);
     expect(typeof doctor.playwright.playwrightCoreInstalled).toBe("boolean");
     for (const secret of [
       "secret-session-root-sentinel",
@@ -127,6 +130,15 @@ describe("amc doctor --json", () => {
       "amc auth repair --listing-url <official AMC theater URL> --browser-channel chrome --json",
     );
     expect(writes.count).toBe(0);
+  });
+
+  it("reports built-in cart recovery available even with no capability module", async () => {
+    const { client } = stubClient("valid");
+    const { code, output } = await run(["doctor", "--json"], client);
+    expect(code).toBe(0);
+    const doctor = JSON.parse(output[0]!);
+    expect(doctor.capabilities.moduleConfigured).toBe(false);
+    expect(doctor.capabilities.recovery).toBe(true);
   });
 
   it("reports none when the session is valid", async () => {
