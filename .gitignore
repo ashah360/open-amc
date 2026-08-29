@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+runtime/
+sessions/
+*.log
+*.har
+*.pyc
+__pycache__/
+.DS_Store

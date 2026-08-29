@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo_root="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)"
+if [[ -f "${repo_root}/dist/cli.js" ]]; then
+  exec node "${repo_root}/dist/cli.js" "$@"
+fi
+exec node "${repo_root}/node_modules/tsx/dist/cli.mjs" "${repo_root}/src/cli.ts" "$@"

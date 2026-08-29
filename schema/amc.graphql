@@ -1,0 +1,4176 @@
+type Account implements Node & IErrorDetails {
+  id: ID!
+  accountId: Int
+  accountType: String
+  address1: String
+  address2: String
+  alias: String
+  birthDate: String
+  canReportCard: Boolean
+  canRequestCard: Boolean
+  cardRequestedDate: Date
+  city: String
+  displayName: String
+  dodSessionId: String @deprecated(reason: "On Demand decommissioned")
+  emailAddress: String
+  event(token: String!): AccountEvent
+  events(type: AccountEventType!, startDate: Date, endDate: Date, after: String, first: Int, before: String, last: Int): AccountEventConnection
+  featureFlagsHash: String
+  firstName: String
+  friendInvitation: AccountFriendInvitation
+  friend(friendGuid: String!): AccountFriend
+  friends: AccountFriends
+  gender: String
+  hasProductSubscription(subscriptionType: ProductSubscriptionType): Boolean
+  isAmcCreditCardHolder: Boolean
+  isActive: Boolean
+  isOldEnoughForAList: Boolean
+  isShareholder: Boolean
+  lastName: String
+  lockedFields: [AccountLockedField]
+  loyaltyCard: AccountLoyaltyCard
+  loyaltyUpgradePrice: Float
+  loyaltyUpgradeProduct: Product
+  middleInitial: String
+  mobilePhoneNumber: String
+  qrCodeDataUrl: String
+  movies(availability: MovieReminderAvailability, after: String, first: Int, before: String, last: Int): AccountMovieConnection
+  mustAcceptLatestTermsAndConditions: Boolean
+  notifications(type: AccountNotificationType!): [AccountNotification]
+  onePassCount: Int
+  orderHistory(startDate: Date, endDate: Date, after: String, first: Int, before: String, last: Int): OrderConnection
+  orderHistoryByProductType(startDate: Date, endDate: Date, eligibility: AccountOrderHistoryEligibilityFilter): OrderConnection
+  personality: AccountPersonality
+  postalCode: String
+  productSubscription(subscriptionType: ProductSubscriptionType): AccountProductSubscription
+  productSubscriptionEligibility: AccountProductSubscriptionEligibility
+  providers: [AccountProvider]
+  rewards: RewardSummary
+  state: String
+  stubs(stub: Int, after: String, first: Int, before: String, last: Int): StubConnection
+  subscriberProfileId: Int
+  termsAndConditions: TermsAndConditions
+  theatres: [Theatre]
+  token: String
+  transactions(startDate: Date, endDate: Date): LoyaltyTransactions
+  wallet: Wallet
+  facebookName: String
+  householdChildCount: Int
+  householdCount: Int
+  instagramUserName: String
+  maritalAnniversary: Date
+  maritalStatus: String
+  twitterHandleName: String
+  customerServicePta: String
+  dodLocker(first: Int, after: String, last: Int, before: String, search: String, categories: [Int], sortBy: DodLockerSort, sortDirection: DodSortDirection): DodLockerConnection @deprecated(reason: "On Demand decommissioned")
+  dodWatchlist(first: Int, after: String, last: Int, before: String, onlyUnentitled: Boolean, sortBy: DodWatchlistSort, sortDirection: DodSortDirection): DodProductConnection @deprecated(reason: "On Demand decommissioned")
+  dodPromoCode(couponId: Int): DodPromoCode @deprecated(reason: "On Demand decommissioned")
+  requiresVerification: Boolean
+  requiresVerificationReason: String
+  profilePhoto(ifModifiedSince: DateTime): AccountProfilePhoto
+  hasProfilePhoto: Boolean
+  error: ErrorInfo
+}
+
+input AccountCreateAssociateInput {
+  cardNumber: String!
+  emailAddress: String!
+  favoriteTheatreNumber: Int!
+  mobilePhoneNumber: String
+  password: String!
+  subscriptions: [AccountSubscriptionInput]
+  captcha: String
+  captchaType: CaptchaType
+}
+
+input AccountCreateInput {
+  address1: String
+  address2: String
+  birthDate: Date
+  captcha: String
+  captchaType: CaptchaType
+  cardNumber: String
+  city: String
+  email: String!
+  firstName: String
+  gender: String
+  lastName: String
+  middleInitial: String
+  password: String!
+  phone: String
+  postalCode: String
+  referralCode: String
+  state: String
+  subscriptions: [AccountSubscriptionInput]
+  theatreId: Int!
+  isShareholder: Boolean
+  orderToken: String
+}
+
+input AccountDismissNotificationInput {
+  notificationId: Int
+}
+
+type AccountEvent implements Node & IErrorDetails {
+  id: ID!
+  dateDisplay: DateTimeDisplay
+  movie: Movie
+  order: Order
+  rating: AccountMovieRating
+  shownTrailers: [ShowtimeViewedTrailer]
+  showtime: Showtime
+  stub: Stub
+  theatre: Theatre
+  token: String
+  until: DateTime
+  when: DateTime
+  error: ErrorInfo
+}
+
+type AccountEventConnection implements IErrorDetails {
+  id: ID!
+  pageInfo: PageInfo!
+  edges: [AccountEventEdge]
+  count: Int
+  error: ErrorInfo
+}
+
+type AccountEventEdge {
+  id: ID!
+  node: AccountEvent
+  cursor: String!
+}
+
+enum AccountEventType {
+  Previous
+  Upcoming
+}
+
+type AccountFriend implements Node & IErrorDetails {
+  id: ID!
+  email: String
+  favorite: Boolean
+  firstName: String
+  friendGuid: String
+  friendsSince: DateDisplay
+  initiated: Boolean
+  lastName: String
+  nickname: String
+  pending: Boolean
+  error: ErrorInfo
+}
+
+type AccountFriendEdge {
+  id: ID!
+  cursor: String!
+  node: AccountFriend
+}
+
+type AccountFriendInvitation implements IErrorDetails {
+  id: ID!
+  creationDate: DateDisplay
+  invitationLink: String
+  invitationToken: String
+  error: ErrorInfo
+}
+
+type AccountFriends implements IErrorDetails {
+  id: ID!
+  finalizedFriendCount: Int
+  friendCapReachedMessage: String
+  maxFriendCount: Int
+  items(status: AccountFriendStatus, after: String, first: Int, before: String, last: Int): AccountFriendsConnection
+  error: ErrorInfo
+}
+
+type AccountFriendsConnection {
+  id: ID!
+  count: Int
+  edges: [AccountFriendEdge]
+  pageInfo: PageInfo!
+  error: ErrorInfo
+  finalizedFriendCount: Int
+  friendCapReachedMessage: String
+  maxFriendsCount: Int
+}
+
+type AccountFriendsPayload {
+  friends: AccountFriends
+}
+
+enum AccountFriendStatus {
+  CONFIRMED
+  PENDING
+}
+
+type AccountLockedField {
+  name: String
+  reason: String
+}
+
+type AccountLoyaltyCard {
+  id: ID!
+  cardNumber: String
+  enrollDate: DateTime
+  enrollDateDisplay: DateDisplay
+  expirationDate: DateTime
+  expirationDateDisplay: DateTimeDisplay
+  isWithinRenewalWindow: Boolean
+  status: String
+  statusInfo: String
+  addToGoogleWalletToken: String @deprecated(reason: "Use the accountCreateAddToGoogleWalletToken mutation instead.")
+}
+
+type AccountMovie implements Node & IErrorDetails {
+  id: ID!
+  movie: Movie
+  movieId: Int
+  purchased: Boolean
+  rating: Int
+  viewed: Boolean
+  error: ErrorInfo
+}
+
+type AccountMovieConnection implements IErrorDetails {
+  id: ID!
+  pageInfo: PageInfo!
+  edges: [AccountMovieEdge]
+  count: Int
+  error: ErrorInfo
+}
+
+type AccountMovieEdge {
+  id: ID!
+  node: AccountMovie
+  cursor: String!
+}
+
+input AccountMovieExperienceInput {
+  movieId: Int!
+  rating: Int
+}
+
+type AccountMovieRating {
+  id: ID!
+  legacyRating: Int
+  ratingPrompted: Boolean!
+}
+
+type AccountNotification {
+  id: ID!
+  notificationId: Int
+  href: String
+  message: String
+}
+
+enum AccountNotificationType {
+  ALL
+  ACCOUNT
+  PRODUCT_SUBSCRIPTION
+}
+
+input AccountOrderHistoryEligibilityFilter {
+  productTypeFilter: OrderHistoryProductType
+  includeFutureShowtimes: Boolean
+  includeRefundedItems: Boolean
+  maxOrders: Int
+}
+
+type AccountPayload {
+  account: Account
+}
+
+type AccountPersonality implements Node & IErrorDetails {
+  id: ID!
+  favoriteActor: AccountPersonalityQuestion
+  favoriteActress: AccountPersonalityQuestion
+  favoriteAltContent: AccountPersonalityQuestion
+  favoriteDirector: AccountPersonalityQuestion
+  favoriteGenre: AccountPersonalityQuestion
+  aboutMeAnniversaryDate: AccountPersonalityQuestion
+  aboutMeChildrenUnder18: AccountPersonalityQuestion
+  aboutMeFacebookName: AccountPersonalityQuestion
+  aboutMeHouseholdMembers: AccountPersonalityQuestion
+  aboutMeInstagramName: AccountPersonalityQuestion
+  aboutMeMaritalStatus: AccountPersonalityQuestion
+  aboutMeNumberInHousehold: AccountPersonalityQuestion
+  aboutMeTwitterHandle: AccountPersonalityQuestion
+  dayToSeeMovie: AccountPersonalityQuestion
+  favoriteOccasion: AccountPersonalityQuestion
+  amcVisitsPerYear: AccountPersonalityQuestion
+  cleanTheatreImportance: AccountPersonalityQuestion
+  keepsMeCurrent: AccountPersonalityQuestion
+  movieTimeOfDay: AccountPersonalityQuestion
+  purchaseCostPair: AccountPersonalityQuestion
+  purchaseLocationPair: AccountPersonalityQuestion
+  specificMoviePair: AccountPersonalityQuestion
+  specificTheatrePair: AccountPersonalityQuestion
+  spendTimeWithFamilyAndFriends: AccountPersonalityQuestion
+  theatreVisitsPerYear: AccountPersonalityQuestion
+  alcoholExperience: AccountPersonalityQuestion
+  amenitiesAndExtrasQuestion: AccountPersonalityQuestion
+  buyingPopcornQuestion: AccountPersonalityQuestion
+  choosingDrinksQuestion: AccountPersonalityQuestion
+  frequentlyExperiencedPremiumContentQuestion: AccountPersonalityQuestion
+  importanceOfPremiumContentQuestion: AccountPersonalityQuestion
+  mobilePhone: AccountPersonalityQuestion
+  moviePurchasedBluRayQuestion: AccountPersonalityQuestion
+  moviePurchasedDVDQuestion: AccountPersonalityQuestion
+  moviePurchasedDigitalDownloadQuestion: AccountPersonalityQuestion
+  moviePurchasesOutsideTheatresQuestion: AccountPersonalityQuestion
+  orderingUniqueAndElevatedFoodQuestion: AccountPersonalityQuestion
+  preferStandardExperienceQuestion: AccountPersonalityQuestion
+  premiumFormatAvailabilityQuestion: AccountPersonalityQuestion
+  sparkAppetiteQuestion: AccountPersonalityQuestion
+  stimulatedSensesQuestion: AccountPersonalityQuestion
+  answeredQuestionCount: Int
+  totalQuestionCount: Int
+  error: ErrorInfo
+}
+
+type AccountPersonalityAnswer {
+  answer: String!
+  otherAnswer: String
+}
+
+input AccountPersonalityInput {
+  questionName: String!
+  answer: String!
+  otherAnswer: String
+}
+
+type AccountPersonalityPayload {
+  personality: AccountPersonality
+  question: AccountPersonalityQuestion
+}
+
+type AccountPersonalityPossibleAnswer {
+  answer: String!
+  image: String
+  value: String
+}
+
+type AccountPersonalityQuestion implements Node & IErrorDetails {
+  id: ID!
+  answer: String!
+  isJsonEncoded: Boolean
+  multipleAnswers: Boolean
+  otherAnswer: String
+  otherPromptText: String
+  possibleAnswers: [AccountPersonalityPossibleAnswer!]
+  questionName: String!
+  questionText: String!
+  error: ErrorInfo
+}
+
+type AccountProductSubscription implements IErrorDetails {
+  id: ID!
+  benefitExpirationDate: DateDisplay
+  canCancel: Boolean
+  commitmentEndDate: DateDisplay
+  counters: ProductSubscriptionCounters
+  isActive: Boolean
+  isGrandfathered: Boolean
+  isPendingDowngrade: Boolean @deprecated(reason: "Use isPendingTransfer")
+  isPendingTransfer: Boolean
+  nextBillDate: DateDisplay
+  notifications: [AccountProductSubscriptionNotification]
+  pauseOptions: ProductSubscriptionPauseOptions
+  pendingDowngrade: ProductSubscriptionPendingTransfer @deprecated(reason: "Use pendingTransfer")
+  pendingTransfer: ProductSubscriptionPendingTransfer
+  planTypeDescription: String
+  productAttributes: ProductAttributes
+  productTypeDescription: String
+  productTypeName: String
+  renewalCost: Currency
+  reservationCapacity: AccountProductSubscriptionCapacity
+  reservationTicketType: String
+  statusChangeReasons: [ProductSubscriptionStatusChangeReason]
+  statusName: String
+  statusNameDesc: String
+  subscriptionCostChange: TheatreProductCostChange
+  terminationFeeAmount: Currency
+  tier: ProductSubscriptionTier
+  transfer(theatreId: Int!): ProductSubscriptionTransfer
+  type: ProductSubscriptionType
+  typeCode: String
+  error: ErrorInfo
+}
+
+type AccountProductSubscriptionCapacity {
+  id: ID!
+  typeCode: AccountProductSubscriptionCapacityTypeEnum
+}
+
+enum AccountProductSubscriptionCapacityTypeEnum {
+  CurrentWeekFull
+  UpcomingFull
+  Full
+}
+
+type AccountProductSubscriptionEligibility {
+  id: ID!
+  canRenew: Boolean
+  renewalEligibilityDateDisplay: DateDisplay
+}
+
+type AccountProductSubscriptionNotification {
+  id: ID!
+  href: String
+  message: String
+}
+
+type AccountProductSubscriptionPayload {
+  productSubscription(subscriptionType: ProductSubscriptionType): AccountProductSubscription
+}
+
+type AccountProfilePhoto implements IErrorDetails {
+  id: ID!
+  lastModifiedDate: DateTime
+  nextAvailableChangeDate: DateTime
+  imageData: String
+  error: ErrorInfo
+}
+
+input AccountProfilePhotoInput {
+  imageData: Upload!
+}
+
+type AccountProvider {
+  id: ID!
+  clientId: String
+  description: String
+  name: String
+  provider: AccountProviderType
+  providerApiToken: String
+}
+
+input AccountProviderInput {
+  provider: AccountProviderType
+  profileId: String!
+}
+
+enum AccountProviderType {
+  facebook
+  twitter
+}
+
+input AccountRatedTrailer {
+  movieId: Int!
+  rating: Int!
+}
+
+input AccountRateTrailerInput {
+  movieId: Int!
+  rating: Int!
+}
+
+type AccountRateTrailerPayload {
+  movieId: Int!
+  rating: Int!
+}
+
+input AccountSubscriptionInput {
+  name: String!
+  channel: String!
+}
+
+input AccountVerifyInput {
+  type: String!
+  value: String!
+}
+
+input AddPaymentForLoadTestingInput {
+  token: String!
+  merchantId: String!
+}
+
+input AddPaymentInput {
+  token: String!
+  type: PaymentTenderType!
+  cardNumber: String
+  pin: String
+  amount: Float
+  merchantTransactionId: String
+  storedCardToken: String
+}
+
+type Address {
+  id: ID!
+  addressId: Int
+  addressLine1: String
+  addressLine2: String
+  city: String
+  postalCode: String
+  state: String
+  type: String
+}
+
+input AddressInput {
+  addressLine1: String
+  addressLine2: String
+  city: String
+  postalCode: String
+  state: String
+}
+
+type AddressSuggestionsPayload {
+  addressSuggestions: [Address]
+}
+
+input AddWalletCreditCardInput {
+  deviceData: String
+  nonce: String!
+  cardHolderEmail: String
+  cardHolderFirstName: String
+  cardHolderLastName: String
+}
+
+input AddWalletDisneyRewardsCardInput {
+  cardNumber: String!
+  name: String
+  pin: String!
+}
+
+input AddWalletGiftCardInput {
+  cardNumber: String!
+  name: String
+  pin: String!
+}
+
+enum ApiType {
+  UNKNOWN
+  PLATFORM
+  CONTENT
+  DOD_METADATA @deprecated(reason: "On Demand decommissioned")
+  DOD_SERVICES @deprecated(reason: "On Demand decommissioned")
+  CONCENTRIX
+}
+
+type AppFeedbackCategory {
+  id: ID!
+  description: String
+}
+
+input AppFeedbackInput {
+  email: String!
+  okToContact: Boolean!
+  categoryId: Int!
+  text: String!
+}
+
+input ApplyDisneyRewardsCardWalletInput {
+  token: String!
+}
+
+input ApplyGiftCardWalletInput {
+  token: String!
+}
+
+type AppRichTextContentBlock implements ContentBlock {
+  blockType: ContentBlockType!
+  content: JSON!
+}
+
+type Attribute implements Node & IErrorDetails {
+  id: ID!
+  abbreviation: String
+  code: String
+  description: String
+  details: AttributeDetail
+  groups: [AttributeGroup]
+  images(contentType: ContentType, after: String, first: Int, before: String, last: Int): MediaConnection
+  media(contentType: ContentType, after: String, first: Int, before: String, last: Int): MediaConnection @deprecated(reason: "Use images")
+  name: String
+  shortDescription: String
+  sort: Int
+  summary: String
+  url: String
+  error: ErrorInfo
+}
+
+type AttributeConnection implements IErrorDetails {
+  id: ID!
+  count: Int
+  edges: [AttributeEdge]
+  pageInfo: PageInfo!
+  error: ErrorInfo
+}
+
+type AttributeDetail {
+  id: ID!
+  movieAttribute: Boolean
+  movieFilter: Boolean
+  premiumOffering: Boolean @deprecated(reason: "Not actually in use but app had the field in a query, retaining for a bit")
+  showtimeAttribute: Boolean
+  showtimeFilter: Boolean
+  sort: Int
+  theatreAttribute: Boolean
+  theatreFilter: Boolean
+}
+
+type AttributeEdge {
+  id: ID!
+  cursor: String!
+  node: Attribute
+}
+
+type AttributeGroup {
+  id: Int
+  description: String
+  name: String
+  sort: Int
+}
+
+enum AttributeGroupType {
+  ACCESSIBILITY
+  AMENITIES
+  FORMAT
+  FEATURES
+  POLICIES
+  NOT_FOR_DISPLAY
+  UNKNOWN
+}
+
+input AttributeInput {
+  exclude: [String]
+  include: [String]
+  operation: Operation
+}
+
+enum AttributeType {
+  ALL
+  FILTERS
+  PREMIUM @deprecated(reason: "Use FILTERS instead")
+  PREMIUM_FILTERS @deprecated(reason: "Use FILTERS instead")
+}
+
+type BitPayInvoice {
+  id: ID!
+  invoiceId: String!
+  url: String!
+  status: String!
+}
+
+type BitPayPayload {
+  invoice: BitPayInvoice
+}
+
+type Blog implements Node & IErrorDetails {
+  id: ID!
+  getPriorityResource: BlogPriorityPost
+  name: String
+  post(blogPostId: String!): BlogPost
+  posts(excludeBlogPostIds: [String], after: String, first: Int, before: String, last: Int): BlogPostConnection
+  error: ErrorInfo
+}
+
+type BlogPost implements Node & IErrorDetails {
+  id: ID!
+  blogPostId: String
+  body: String
+  byline: String
+  bylineImage: String
+  ctas: [CtaType]
+  imageUrl: String
+  movie: Movie
+  movieSlug: String
+  movies: [Movie]
+  publishedOn: String
+  publishedText: String
+  summary: String
+  tags: [TagType]
+  title: String
+  url: String
+  error: ErrorInfo
+}
+
+type BlogPostConnection implements IErrorDetails {
+  id: ID!
+  count: Int
+  edges: [BlogPostEdge]
+  pageInfo: PageInfo!
+  error: ErrorInfo
+}
+
+type BlogPostEdge {
+  id: ID!
+  cursor: String!
+  node: BlogPost
+}
+
+type BlogPriorityPost implements Node & IErrorDetails {
+  id: ID!
+  blogPriorityId: String
+  pageSize: Int
+  priority1Id: String
+  priority2Id: String
+  priority3Id: String
+  error: ErrorInfo
+}
+
+type CallsToAction implements Node & IErrorDetails {
+  id: ID!
+  href: String
+  linkText: String
+  linkUrl: String
+  templated: String
+  typeId: Int
+  typeName: String
+  error: ErrorInfo
+}
+
+input CancelProductSubscriptionInput {
+  subscriptionType: ProductSubscriptionType
+  cancellationReason: String
+  token: String
+  merchantToken: String
+  cvvNonce: String
+  deviceData: String
+}
+
+enum CaptchaType {
+  WEB
+  IOS
+  ANDROID
+}
+
+input CardNumberInput {
+  cardNumber: String!
+}
+
+type CastAndCrew {
+  id: ID!
+  biography: String
+  castMemberImage: String
+  name: String!
+  role: String!
+}
+
+type CastAndCrewConnection implements IErrorDetails {
+  id: ID!
+  count: Int
+  edges: [CastAndCrewEdge]
+  pageInfo: PageInfo!
+  error: ErrorInfo
+}
+
+type CastAndCrewEdge {
+  id: ID!
+  cursor: String!
+  node: CastAndCrew
+}
+
+input ChangePasswordInput {
+  captcha: String
+  captchaType: CaptchaType
+  oldPassword: String!
+  newPassword: String!
+}
+
+type Charge {
+  id: ID!
+  displayName: String
+  displayAmount: String
+}
+
+type ChargeGroup {
+  id: ID!
+  charges: [Charge]
+  title: String
+}
+
+type City implements Node & IErrorDetails {
+  id: ID!
+  name: String
+  slug: String
+  theatres(after: String, first: Int, before: String, last: Int): TheatreConnection
+  error: ErrorInfo
+}
+
+type CityConnection implements IErrorDetails {
+  id: ID!
+  pageInfo: PageInfo!
+  edges: [CityEdge]
+  count: Int
+  error: ErrorInfo
+}
+
+type CityEdge {
+  id: ID!
+  node: City
+  cursor: String!
+}
+
+type ComboComponent {
+  id: ID!
+  concession: Concession
+  groupComboComponents: [GroupComboComponent]
+  name: String
+  quantity: Int
+}
+
+input ComponentSelectionInput {
+  sku: String!
+  modifiers: [ModifierSelectionInput]
+}
+
+type Concession {
+  id: ID!
+  comboComponents: [ComboComponent]
+  concessionId: Int
+  description: String
+  discounts: [ConcessionDiscount]
+  parentGroup: ConcessionGroup
+  parentCategory: ConcessionCategory
+  image(contentType: ContentType!): Media
+  modifierGroups: [ModifierGroup]
+  name: String
+  nutritionalInfo: String
+  prepTime: Int
+  price(includeFees: Boolean): Float
+  productType: String
+  size: String
+  sku: String
+  tax: Float
+  upsellGroup: UpsellGroup
+  userChoiceGroups: [ComboComponent]
+}
+
+type ConcessionCategory {
+  id: ID!
+  categoryId: Int
+  group(concessionId: Int!): ConcessionGroup
+  groups: [ConcessionGroup]
+  image(contentType: ContentType!): Media
+  level: Int
+  name: String
+  sortOrder: Int
+}
+
+type ConcessionDiscount {
+  id: ID!
+  amount: Float
+  type: String
+}
+
+type ConcessionGroup {
+  id: ID!
+  concessionId: Int
+  description: String
+  displayType: String
+  image(contentType: ContentType!): Media
+  isDiscountedForLoyalty: Boolean
+  items: [Concession]
+  name: String
+  nutritionalInfo: String
+  priceRange: String
+  priceRangeBreakdown: String
+  sortOrder: Int
+}
+
+type ConcessionOrderFee implements Node {
+  id: ID!
+  type: String
+  cost: Currency
+  quantity: Int
+}
+
+type Concessions implements Node & IErrorDetails {
+  id: ID!
+  auxiliaryItems: [Concession]
+  categories: [ConcessionCategory]
+  category(categoryId: Int!): ConcessionCategory
+  modifierGroups: [ModifierGroup]
+  theatreId: Int
+  upSellConcession: Concession
+  error: ErrorInfo
+}
+
+type ConcessionTime {
+  id: ID!
+  available: Int
+  isShowtime: Boolean
+  timeDisplay: DateTimeDisplay
+  timeLocal: DateTime
+  timeUtc: DateTime
+  value: String
+}
+
+type ConcessionTimes implements IErrorDetails {
+  id: ID!
+  times: [ConcessionTime]
+  error: ErrorInfo
+}
+
+type ConcessionUpsellItem implements Node & IErrorDetails {
+  id: ID!
+  callToActionText: String
+  productType: String
+  type: String
+  concession: Concession
+  error: ErrorInfo
+}
+
+input ConfirmationRequestInput {
+  emailAddress: String!
+  confirmationDate: Date
+  captcha: String
+  captchaType: CaptchaType
+}
+
+type Content {
+  id: ID!
+  templates(requests: [ContentTemplateRequest!]!): [ContentTemplateSection]!
+}
+
+interface ContentBlock {
+  blockType: ContentBlockType!
+}
+
+enum ContentBlockType {
+  appRichText
+}
+
+type ContentTemplate {
+  id: ID!
+  slug: String!
+  section: ContentTemplateSection
+}
+
+input ContentTemplateContext {
+  orderToken: String
+  showtimeId: Int
+}
+
+input ContentTemplateRequest {
+  templateSlug: String!
+  sectionSlug: String!
+  context: ContentTemplateContext
+}
+
+type ContentTemplateSection {
+  id: ID!
+  templateSlug: String!
+  sectionSlug: String!
+  content: [ContentBlock!]!
+}
+
+enum ContentType {
+  Poster
+  PosterAlternate
+  Poster3D
+  PosterIMAX
+  Movie_Still
+  Publicity
+  Trailer
+  TrailerTeaser
+  TrailerAlternate
+  MovieClip
+  News
+  Interview
+  Interior
+  Exterior
+  Primary
+  StoreIcon
+  Promotional
+  Hero
+  DigitalGiftCard
+  SplashScreen
+  SpecialOffer
+  HeroDesktopDynamic
+  HeroMobileDynamic
+  MovieStillDynamic
+  PosterDynamic
+  PosterAlternateDynamic
+  Poster3DDynamic
+  PosterIMAXDynamic
+  OnDemandPoster @deprecated(reason: "On Demand decommissioned")
+  TrailerDynamic
+  OnDemandTrailer @deprecated(reason: "On Demand decommissioned")
+  TrailerStillDynamic
+  TrailerTeaserDynamic
+  TrailerAlternateDynamic
+  BackgroundDynamic
+  BackgroundTopDynamic
+  BackgroundBottomDynamic
+  InteriorDynamic
+  ExteriorDynamic
+  PromotionDynamic
+  ProfileDynamic
+  LogoDynamic
+  IconDynamic
+  Logo
+  ProductCategory
+  Product
+}
+
+input CoordinatesInput {
+  longitude: Float!
+  latitude: Float!
+}
+
+type CreditCard {
+  id: ID!
+  name: String
+  cardType: String
+  expirationDate: Date
+  expirationDateDisplay: DateDisplay
+  lastFour: String
+  merchantCustomer: String
+  merchantToken: String
+  default: Boolean
+  cardHolderFirstName: String
+  cardHolderLastName: String
+  cardHolderEmail: String
+  address1: String
+  address2: String
+  city: String
+  state: String
+  postalCode: String
+  verified: Boolean
+}
+
+input CryptoPaymentInput {
+  invoiceId: String!
+  gateway: String!
+}
+
+type CtaType {
+  id: ID!
+  className: String
+  href: String
+  text: String
+  type: String
+  ariaLabel: String
+}
+
+type Currency {
+  id: ID!
+  actual: Float
+  USD: USD
+}
+
+type CustomerService {
+  askAQuestionUri: String
+  baseUri: String
+  appFeedbackCategories: [AppFeedbackCategory]
+}
+
+scalar Date
+
+type DateDisplay {
+  id: ID!
+  prefix: String
+  date: String
+  dateShort: String
+  monthDate: String
+  monthDateShort: String
+  monthYear: String
+  monthDayYear: String
+  monthDayYearSingleDigit: String
+  year: String
+}
+
+input DateInput {
+  date: Date!
+}
+
+scalar DateTime
+
+type DateTimeDisplay {
+  id: ID!
+  prefix: String
+  date: String
+  dateShort: String
+  monthDate: String
+  monthDateShort: String
+  monthDayYearSingleDigit: String
+  monthYear: String
+  time: String
+  year: String
+  amPm: String
+  timezone: String
+}
+
+input DeleteDisneyRewardsCardPaymentInput {
+  token: String!
+  lineItemNumber: Int
+}
+
+input DeleteGiftCardPaymentInput {
+  token: String!
+  lineItemNumber: Int
+}
+
+input DeleteOrderInput {
+  token: String!
+}
+
+input DeletePaymentsInput {
+  token: String!
+  type: PaymentTenderType!
+  lineItemNumber: Int
+}
+
+enum DeliveryType {
+  ExpressPickup
+  DeliveryToSeat
+}
+
+enum DeviceCategory {
+  MobilePhone
+  Tablet
+}
+
+input DeviceUpdateApplicationTokenInput {
+  addToken: String!
+  category: DeviceCategory!
+  deviceId: String!
+  isPushEnabled: Boolean!
+  registrationType: String!
+  removeToken: String
+}
+
+input DismissNotificationInput {
+  notificationId: String!
+}
+
+type DisneyRewardsCard implements Node & IErrorDetails {
+  id: ID!
+  balance: Float
+  name: String
+  number: String
+  lastFour: String
+  pin: String
+  qrCode: String
+  imageUrl: String
+  merchantToken: String
+  message: String
+  error: ErrorInfo
+}
+
+type Dod implements Node & IErrorDetails {
+  id: ID!
+  config: DodConfigType
+  downloadManagerUrl(platform: String!): String
+  page(slug: String, name: String): DodPage
+  categories: [DodCategory]
+  mpaaRatings: [DodGuidanceRating]
+  sortOptions(sortType: DodSortTypes!): [DodSortOption]
+  catalog(first: Int, after: String, last: Int, before: String, search: String, categories: [Int], ratings: [Int], sortBy: DodCatalogSort, sortDirection: DodSortDirection): DodProductConnection
+  error: ErrorInfo
+}
+
+type DodBucket implements Node & IErrorDetails {
+  id: ID!
+  bucketId: Int
+  bucketType: DodBucketType
+  categoryId: Int
+  canFilterAndSort: Boolean
+  name: String
+  slug: String
+  isPersonalized: Boolean
+  products(after: String, first: Int, before: String, last: Int): DodProductConnection
+  error: ErrorInfo
+}
+
+enum DodBucketType {
+  NEW_PRODUCTS
+  POPULAR_PRODUCTS
+  PLAYLIST
+  COMING_SOON_PRODUCTS
+  RECOMMENDED_PRODUCTS
+  LAST_CHANCE_PRODUCTS
+  LIFETIME_POPULAR_PRODUCTS
+  BEST_RATED_PRODUCTS
+  SUBSCRIPTIONS
+  SHARED_PRICING_PLAN
+  PRODUCT_CATEGORY
+  POPULAR_INSTANTLY_VIEWED_PRODUCTS
+  VIEW_BASED_RECOMMENDED_PRODUCTS
+  PROMOTION
+  IMAGE_LIST
+  CHANNEL_BRAND_LIST
+  SEARCH_FILTER
+  CONTENT_VIEW
+}
+
+enum DodCatalogSort {
+  DATE
+  NAME
+}
+
+type DodCategory implements Node & IErrorDetails {
+  id: ID!
+  categoryId: Int
+  name: String
+  children: [DodCategory]
+  error: ErrorInfo
+}
+
+type DodConfigType {
+  metadataUri: String
+  servicesUri: String
+  distributionChannel: String
+  systemId: String
+  deviceType: String
+  language: String
+}
+
+input DodDeviceActivationInput {
+  rendezvousCode: String!
+}
+
+type DodGuidanceRating implements Node & IErrorDetails {
+  id: ID!
+  ratingId: Int
+  name: String
+  description: String
+  error: ErrorInfo
+}
+
+type DodLockerConnection implements IErrorDetails {
+  id: ID!
+  pageInfo: PageInfo!
+  edges: [DodLockerItemEdge]
+  count: Int
+  error: ErrorInfo
+}
+
+type DodLockerItem implements Node & IErrorDetails {
+  id: ID!
+  createdDate: DateTime
+  lockerId: Int
+  product: DodProduct
+  error: ErrorInfo
+}
+
+type DodLockerItemEdge {
+  id: ID!
+  node: DodLockerItem
+  cursor: String!
+}
+
+enum DodLockerSort {
+  ORDER_DATE
+  NAME
+}
+
+type DodPage implements Node & IErrorDetails {
+  id: ID!
+  pageId: Int
+  name: String
+  slug: String
+  buckets: [DodBucket]
+  bucket(bucketSlug: String!): DodBucket
+  featuredProducts: [DodProduct]
+  error: ErrorInfo
+}
+
+type DodPricing implements Node & IErrorDetails {
+  id: ID!
+  availabilityDate: Date
+  displayOrderNumber: Int
+  entitlementType: String
+  isPreorder: Boolean
+  resolution: String
+  pricePlanId: Int
+  basePrice: Float
+  finalPrice: Float
+  productId: Int
+  sku: String
+  error: ErrorInfo
+}
+
+type DodProduct implements Node & IErrorDetails {
+  id: ID!
+  productId: Int
+  name: String
+  imageUrl: String
+  heroUrl: String
+  runTime: Int
+  description: String
+  releaseDateUtc: DateTime
+  mpaaRating: String
+  websiteUrl: String
+  movie: Movie
+  error: ErrorInfo
+}
+
+type DodProductConnection implements IErrorDetails {
+  id: ID!
+  pageInfo: PageInfo!
+  edges: [DodProductEdge]
+  count: Int
+  error: ErrorInfo
+}
+
+type DodProductContext implements Node & IErrorDetails {
+  id: ID!
+  productId: Int
+  contentProgressPercentage: Int
+  available: Boolean
+  hasWebsitePlayback: Boolean
+  expirationDate: DateTime
+  isOnWatchlist: Boolean
+  pricing: DodPricing
+  error: ErrorInfo
+}
+
+input DodProductContextUpdateInput {
+  pricingPlanId: Int!
+  productId: Int!
+}
+
+type DodProductContextUpdatePayload {
+  dodProductContext: DodProductContext @deprecated(reason: "On Demand decommissioned")
+  account: Account
+}
+
+type DodProductEdge {
+  id: ID!
+  node: DodProduct
+  cursor: String!
+}
+
+type DodPromoCode implements Node & IErrorDetails {
+  id: ID!
+  couponId: Int
+  redemptions: Int
+  maxRedemptions: Int
+  associations: [DodPromoCodeAssociation]
+  error: ErrorInfo
+}
+
+type DodPromoCodeAssociation {
+  id: ID!
+  productId: Int
+  pricingPlanId: Int
+}
+
+input DodRestartContentInput {
+  pricingPlanId: Int!
+  productId: Int!
+}
+
+input DodSeedlistFulfillInput {
+  code: String
+  skus: [String]
+}
+
+enum DodSortDirection {
+  ASCENDING
+  DESCENDING
+}
+
+type DodSortOption implements Node {
+  id: ID!
+  display: String
+  sortBy: String
+  defaultSortDirection: String
+}
+
+enum DodSortTypes {
+  CATALOG
+  LOCKER
+  WATCHLIST
+}
+
+enum DodWatchlistSort {
+  DATE
+  NAME
+}
+
+input DodWatchlistUpdateInput {
+  movieId: Int
+  isRemoving: Boolean
+}
+
+input EmailInput {
+  email: String!
+}
+
+type Error implements IError {
+  id: ID!
+  apiCode: Int
+  exceptionMessage: String
+  message: String
+  method: String
+  stack: String
+  statusCode: Int
+  type: ErrorType
+  uri: String
+}
+
+type ErrorInfo implements IError {
+  id: ID!
+  message: String
+  type: ErrorType
+  errors: [Error]
+}
+
+enum ErrorType {
+  AUTH
+  ERROR
+  FATAL
+  WARNING
+}
+
+input FaqsFeedbackAnswerRatingInput {
+  answerId: Int!
+  rating: Int!
+}
+
+type FlashSale implements Node & IErrorDetails {
+  id: ID!
+  html: FlashSaleHTML
+  publishedOn: DateTime
+  error: ErrorInfo
+}
+
+type FlashSaleHTML {
+  id: ID!
+  comparison: String
+  dashboard: String
+  paymentPremiere: String
+  renewPremiere: String
+  stubs: String
+}
+
+input FoodAndDrinkInfoInput {
+  token: String!
+  concessionsOrderName: String
+  deliverySeatName: String
+  deliveryShowtimeId: Int
+  deliveryTime: String
+  deliveryType: DeliveryType
+  smsNotificationPhoneNumber: String
+}
+
+input FriendAcceptInvitationInput {
+  inviteToken: String!
+}
+
+input FriendDeleteInput {
+  friendGuid: String!
+}
+
+type FriendDiscountEligibilityMessageType {
+  code: Int
+  message: String
+  urn: String
+}
+
+type FriendDiscountEligibilityType {
+  isEligible: Boolean
+  isOutOfTier: Boolean
+  messages: [FriendDiscountEligibilityMessageType]
+}
+
+type FriendInvitationPayload {
+  friendInvitation: AccountFriendInvitation
+}
+
+type FriendPayload {
+  friend: AccountFriend
+}
+
+type FriendToken implements Node & IErrorDetails {
+  id: ID!
+  firstName: String
+  invitationToken: String
+  lastName: String
+  error: ErrorInfo
+}
+
+input FriendUpdateInput {
+  friendGuid: String!
+  favorite: Boolean
+  nickname: String
+}
+
+input FulfillOrderInput {
+  token: String!
+  email: String
+  contact: ZoomRoomContactInput
+  notes: String
+  paymentMethodType: String
+  merchantToken: String
+  nonce: String
+  deviceData: String
+  cvvNonce: String
+  birthYear: String
+  countryCode: String
+  postalCode: String
+  region: String
+  isGiftRedemption: Boolean
+  cryptoPayment: CryptoPaymentInput
+}
+
+type Geocoordinate {
+  id: ID!
+  latitude: Float
+  longitude: Float
+}
+
+type GiftCard implements Node & IErrorDetails {
+  id: ID!
+  balance: Float
+  balanceInquiryToken: String
+  imageUrl: String
+  lastFour: String
+  merchantToken: String
+  message: String
+  name: String
+  qrCode: String
+  status: String
+  token: String
+  error: ErrorInfo
+}
+
+input GiftVoucherExchangeInput {
+  token: String!
+}
+
+type GroupComboComponent {
+  id: ID!
+  name: String
+  sku: String
+}
+
+interface IError {
+  id: ID!
+  message: String
+}
+
+interface IErrorDetails {
+  error: ErrorInfo
+}
+
+type IMDBRating {
+  id: ID!
+  imdbMovieUrl: String
+  imdbRating: Float
+  imdbTitleId: ID
+}
+
+interface IMovie {
+  id: ID!
+  absoluteWebsiteUrl: String
+  accountMovieDetails: AccountMovie
+  appUrl: String
+  attributes(groups: [AttributeGroupType], type: AttributeType, after: String, first: Int, before: String, last: Int): AttributeConnection
+  castAndCrew(after: String, first: Int, before: String, last: Int): CastAndCrewConnection
+  directors: String
+  dodPricing(userContextualPricing: Boolean): [DodPricing] @deprecated(reason: "On Demand decommissioned")
+  dodProduct: DodProduct @deprecated(reason: "On Demand decommissioned")
+  dodProductContext: DodProductContext @deprecated(reason: "On Demand decommissioned")
+  genre: String
+  image(contentType: ContentType!): Media
+  images(contentType: ContentType, after: String, first: Int, before: String, last: Int): MediaConnection
+  isPrivateRental: Boolean
+  isProductSubscriptionEligible(subscriptionType: ProductSubscriptionType): Boolean
+  isReleased: Boolean
+  movieId: Int
+  mpaaRating: String
+  name: String
+  onlineTicketAvailabilityDateUtc: DateTime
+  peeTimes(after: String, first: Int, before: String, last: Int): PeeTimeConnection
+  preferredPoster: Media
+  preferredTrailer: Media
+  ratings: MovieRatings
+  releaseDateDisplay: DateDisplay
+  releaseDateUtc: Date
+  runTime: Int
+  secondaryGenre: String
+  shortSynopsis: String
+  slug: String
+  sortableName: String
+  starringActors: String
+  status: MovieStatus
+  synopsis: String
+  synopsisTagLine: String
+  theatres(after: String, first: Int, before: String, last: Int): TheatreConnection
+  video(contentType: ContentType!): Media
+  videos(contentType: ContentType, after: String, first: Int, before: String, last: Int): MediaConnection
+  vuduUrl: String
+  websiteUrl: String
+  canPrequeue: Boolean @deprecated(reason: "Queueit moved to cloudflare edge workers")
+  queueEventId: String @deprecated(reason: "Queueit moved to cloudflare edge workers")
+}
+
+interface ITheatre {
+  theatreId: Int
+  brand: String
+  slug: String
+  websiteUrl: String
+  absoluteWebsiteUrl: String
+  facebookUrl: String
+  directionsUrl: String
+  outageDescription: String
+  isInOutage: Boolean
+  distance: Float
+  name: String
+  longName: String
+  secondaryLongName: String
+  guestServicesPhoneNumber: String
+  addressLine1: String
+  addressLine2: String
+  city: String
+  state: String
+  stateCode: String
+  postalCode: String
+  latitude: Float
+  longitude: Float
+  utcOffset: String
+  citySlug: String
+  stateSlug: String
+  marketSlug: String
+  marketName: String
+  ticketable: Boolean
+  icon: String
+  thumbnail: String
+  deliveryToSeat: Boolean
+  onlineConcessions: Boolean
+  isFavorite: Boolean
+  favoriteSequence: Int
+  isSelected: Boolean
+  formats(movieId: Int): ShowtimeMovieFormats
+  movies(movieId: Int, after: String, first: Int, before: String, last: Int, sort: Boolean): TheatreMovieConnection
+  images(contentType: ContentType, after: String, first: Int, before: String, last: Int): MediaConnection
+  loyaltyVersion: TheatreLoyaltyVersion
+  attributes(groups: [AttributeGroupType], resourceTypes: [ResourceType], type: AttributeType, after: String, first: Int, before: String, last: Int): AttributeConnection
+  dtsShowtimes(orderToken: String!, deliveryDate: Date!, auditorium: Int!): [Showtime]
+  concessions: Concessions
+  concessionTimes(showtimeId: Int, pickupDate: Date, orderId: Int): ConcessionTimes
+  products(sku: String!): TheatreProducts
+  hasMultipleKitchens: Boolean
+}
+
+interface IValidationError {
+  id: ID!
+  message: String
+  field: String
+}
+
+scalar JSON
+
+type Location implements Node & IErrorDetails {
+  id: ID!
+  title: String
+  type: String
+  state: String
+  latitude: Float
+  longitude: Float
+  theatres(query: String, includeAttributes: String, excludeAttributes: String, operation: Operation, after: String, first: Int, before: String, last: Int): TheatreConnection
+  error: ErrorInfo
+}
+
+type LocationConnection implements IErrorDetails {
+  id: ID!
+  pageInfo: PageInfo!
+  edges: [LocationEdge]
+  count: Int
+  error: ErrorInfo
+}
+
+type LocationEdge {
+  id: ID!
+  node: Location
+  cursor: String!
+}
+
+input LoginInput {
+  email: String!
+  password: String!
+  captcha: String
+  captchaType: CaptchaType
+  orderToken: String
+}
+
+input LoginOauthInput {
+  provider: AccountProviderType!
+  profileId: String!
+  accessToken: String!
+  accessTokenSecret: String
+}
+
+input LogoutInput {
+  orderToken: String
+}
+
+type LoyaltyCard {
+  id: ID!
+  accountType: String
+  cardNumber: String
+  expirationDate: DateTime
+  expirationDateDisplay: DateTimeDisplay
+  status: String
+  statusInfo: String
+}
+
+type LoyaltyTransactionDay {
+  amount: Float
+  date: Date
+  items: [LoyaltyTransactionItem]
+  theatre: Theatre
+}
+
+type LoyaltyTransactionItem {
+  category: String
+  description: String
+  price: Float
+}
+
+type LoyaltyTransactions implements Node & IErrorDetails {
+  id: ID!
+  days: [LoyaltyTransactionDay]
+  endDate: Date
+  startDate: Date
+  error: ErrorInfo
+}
+
+type Machine implements Node & IErrorDetails {
+  id: ID!
+  alistTourDismissed: Boolean
+  onboardingTourDismissed: Boolean
+  error: ErrorInfo
+}
+
+type Market implements Node & IErrorDetails {
+  id: ID!
+  name: String
+  slug: String
+  theatres(after: String, first: Int, before: String, last: Int): TheatreConnection
+  error: ErrorInfo
+}
+
+type MarketConnection implements IErrorDetails {
+  id: ID!
+  pageInfo: PageInfo!
+  edges: [MarketEdge]
+  count: Int
+  error: ErrorInfo
+}
+
+type MarketEdge {
+  id: ID!
+  node: Market
+  cursor: String!
+}
+
+type Media implements Node & IErrorDetails {
+  id: ID!
+  contentType: String
+  creationDateUtc: DateTime
+  description: String
+  duration: Float
+  effectiveEndDate: DateTime
+  effectiveStartDate: DateTime
+  name: String
+  summary: String
+  externalId: String
+  isActive: Boolean
+  longDescription: String
+  mediaType: String
+  relatedLinkDisplayText: String
+  relatedLinkUrl: String
+  shortDescription: String
+  sortOrder: Int
+  tags: String
+  thumbnailUrl: String
+  url: String
+  videoStillImageUrl: String
+  error: ErrorInfo
+}
+
+type MediaConnection implements IErrorDetails {
+  id: ID!
+  count: Int
+  edges: [MediaEdge]
+  pageInfo: PageInfo!
+  error: ErrorInfo
+}
+
+type MediaEdge {
+  id: ID!
+  cursor: String!
+  node: Media
+}
+
+enum MediaType {
+  images
+  videos
+}
+
+type Modifier {
+  id: ID
+  displayName: String
+  name: String
+  price: Float
+  sku: String
+  tax: Float
+}
+
+type ModifierGroup {
+  id: ID!
+  groupName: String
+  maximumQuantity: Int
+  minimumQuantity: Int
+  modifiers: [Modifier]
+  parentComponentName: String
+  parentIndex: Int
+  required: Boolean
+}
+
+input ModifierSelectionInput {
+  sku: String!
+}
+
+type Movie implements Node & IMovie & IErrorDetails {
+  id: ID!
+  absoluteWebsiteUrl: String
+  accountMovieDetails: AccountMovie
+  appUrl: String
+  attributes(groups: [AttributeGroupType], type: AttributeType, after: String, first: Int, before: String, last: Int): AttributeConnection
+  canPrequeue: Boolean @deprecated(reason: "Queueit moved to cloudflare edge workers")
+  castAndCrew(after: String, first: Int, before: String, last: Int): CastAndCrewConnection
+  directors: String
+  dodPricing(userContextualPricing: Boolean): [DodPricing] @deprecated(reason: "On Demand decommissioned")
+  dodProduct: DodProduct @deprecated(reason: "On Demand decommissioned")
+  dodProductContext: DodProductContext @deprecated(reason: "On Demand decommissioned")
+  dodSimilarMovies: MovieConnection @deprecated(reason: "On Demand decommissioned")
+  formats(theatreId: Int!): ShowtimeMovieFormats
+  genre: String
+  image(contentType: ContentType!): Media
+  images(contentType: ContentType, after: String, first: Int, before: String, last: Int): MediaConnection
+  isPrivateRental: Boolean
+  isProductSubscriptionEligible(subscriptionType: ProductSubscriptionType): Boolean
+  isReleased: Boolean
+  isTitleSpecificPrivateRental: Boolean
+  distributorId: Int
+  distributorCode: String
+  movieId: Int
+  mpaaRating: String
+  name: String
+  onlineTicketAvailabilityDateUtc: DateTime
+  peeTimes(after: String, first: Int, before: String, last: Int): PeeTimeConnection
+  preferredPoster: Media
+  preferredTrailer: Media
+  promotions: Promotions
+  queueEventId: String @deprecated(reason: "Queueit moved to cloudflare edge workers")
+  ratings: MovieRatings
+  relatedBlogs(after: String, first: Int, before: String, last: Int): RelatedBlogConnection
+  relatedVideos(contentType: ContentType, after: String, first: Int, before: String, last: Int): RelatedVideoConnection
+  releaseDateDisplay: DateDisplay
+  releaseDateUtc: Date
+  runTime: Int
+  secondaryGenre: String
+  shortSynopsis: String
+  slug: String
+  sortableName: String
+  starringActors: String
+  status: MovieStatus
+  synopsis: String
+  synopsisTagLine: String
+  theatres(after: String, first: Int, before: String, last: Int): TheatreConnection
+  video(contentType: ContentType!): Media
+  videos(contentType: ContentType, after: String, first: Int, before: String, last: Int): MediaConnection
+  vuduUrl: String
+  websiteUrl: String
+  error: ErrorInfo
+}
+
+enum MovieAvailability {
+  NOW_PLAYING
+  ADVANCE_TICKETS
+  COMING_SOON
+  ALL
+  NOT_IN_THEATRES
+  ON_DEMAND
+  EVENTS
+}
+
+type MovieConnection implements IErrorDetails {
+  id: ID!
+  count: Int
+  edges: [MovieEdge]
+  filterableAttributes(groups: [AttributeGroupType], type: AttributeType, after: String, first: Int, before: String, last: Int): AttributeConnection
+  pageInfo: PageInfo!
+  error: ErrorInfo
+}
+
+type MovieEdge {
+  id: ID!
+  cursor: String!
+  node: Movie
+}
+
+input MovieInput {
+  movieId: Int!
+}
+
+input MovieRatingInput {
+  movieId: Int!
+  rating: Int
+  viewed: Boolean
+  channel: SubscriptionChannelType
+  identifier: String
+}
+
+type MovieRatings {
+  id: ID!
+  imdb: IMDBRating
+  rottenTomatoes: RottenTomatoesRating
+}
+
+enum MovieReminderAvailability {
+  NOW_PLAYING
+  ADVANCE_TICKETS
+  COMING_SOON
+  NOT_IN_THEATRES
+}
+
+enum MovieStatus {
+  NOW_PLAYING
+  ADVANCE_TICKETS
+  COMING_SOON
+  NOT_IN_THEATRES
+}
+
+type MovieTheatre implements Node & ITheatre & IErrorDetails {
+  id: ID!
+  theatreId: Int
+  brand: String
+  slug: String
+  websiteUrl: String
+  absoluteWebsiteUrl: String
+  facebookUrl: String
+  directionsUrl: String
+  outageDescription: String
+  isInOutage: Boolean
+  distance: Float
+  name: String
+  longName: String
+  secondaryLongName: String
+  guestServicesPhoneNumber: String
+  addressLine1: String
+  addressLine2: String
+  city: String
+  state: String
+  stateCode: String
+  postalCode: String
+  latitude: Float
+  longitude: Float
+  utcOffset: String
+  citySlug: String
+  stateSlug: String
+  marketSlug: String
+  marketName: String
+  ticketable: Boolean
+  icon: String
+  thumbnail: String
+  deliveryToSeat: Boolean
+  onlineConcessions: Boolean
+  isFavorite: Boolean
+  favoriteSequence: Int
+  isSelected: Boolean
+  hasMultipleKitchens: Boolean
+  formats(movieId: Int): ShowtimeMovieFormats
+  movies(movieId: Int, after: String, first: Int, before: String, last: Int, sort: Boolean): TheatreMovieConnection
+  images(contentType: ContentType, after: String, first: Int, before: String, last: Int): MediaConnection
+  loyaltyVersion: TheatreLoyaltyVersion
+  attributes(groups: [AttributeGroupType], resourceTypes: [ResourceType], type: AttributeType, after: String, first: Int, before: String, last: Int): AttributeConnection
+  concessions: Concessions
+  concessionQuickAdd: Concession @deprecated(reason: "Use quickAddConcessions instead.")
+  quickAddConcessions(target: String!, orderToken: String, showtimeId: Int): [QuickAddConcessions]
+  dtsShowtimes(orderToken: String!, deliveryDate: Date!, auditorium: Int!): [Showtime]
+  concessionOrderFees: [ConcessionOrderFee]
+  concessionTimes(showtimeId: Int, pickupDate: Date, orderId: Int): ConcessionTimes
+  products(sku: String!): TheatreProducts
+  productSubscriptions(subscriptionType: ProductSubscriptionType): TheatreProducts
+  promotions: [TemplatedPromotion]
+  transparentPricing: Boolean
+  error: ErrorInfo
+}
+
+type Mutation {
+  orderCreateBitPayInvoice(input: UpdateOrderInput): BitPayPayload
+  orderCreate(input: OrderCreateInput!): OrderPayload
+  orderDelete(input: DeleteOrderInput!): SuccessPayload
+  orderUpdate(input: UpdateOrderInput!): OrderPayload
+  orderAddProducts(input: ProductsInput!): OrderPayload
+  orderApplyLoyaltyRewards(input: OrderInput!): OrderPayload
+  orderRemoveLoyaltyRewards(input: OrderInput!): OrderPayload
+  orderUpdateProducts(input: ProductsInput!): OrderPayload
+  orderUpdateFoodAndDrinkInfo(input: FoodAndDrinkInfoInput!): OrderPayload
+  orderDeleteProducts(input: ProductsInput!): OrderPayload
+  orderSelectSeats(input: SelectSeatsInput!): OrderPayload
+  orderResetSeats(input: ResetSeatsInput!): OrderPayload
+  orderApplyGiftCardWallet(input: ApplyGiftCardWalletInput!): OrderPayload
+  orderApplyDisneyRewardsCardWallet(input: ApplyDisneyRewardsCardWalletInput!): OrderPayload
+  orderAddPayment(input: AddPaymentInput!): OrderPayload
+  orderAddPaymentForLoadTesting(input: AddPaymentForLoadTestingInput!): OrderPayload
+  orderDeleteGiftCardPayment(input: DeleteGiftCardPaymentInput!): OrderPayload
+  orderDeleteDisneyRewardsCardPayment(input: DeleteDisneyRewardsCardPaymentInput!): OrderPayload
+  orderDeletePayments(input: DeletePaymentsInput!): OrderPayload
+  orderFulfill(input: FulfillOrderInput!): OrderPayload
+  orderGiftVoucherExchange(input: GiftVoucherExchangeInput!): OrderPayload
+  orderExpirationUpdate(input: OrderInput!): OrderPayload
+  orderSendSmsConfirmation(input: SendSmsInput!): SuccessPayload
+  orderSetAddress(input: OrderAddressInput!): OrderPayload
+  orderResendGift(input: OrderInput!): SuccessPayload
+  orderRefund(input: RefundOrderInput!): OrderPayload
+  orderApplyPromoCode(input: PromoCodeInput!): OrderPayload
+  orderDeletePromoCode(input: PromoCodeInput!): OrderPayload
+  orderGroupCreate(input: OrderGroupInput!): OrderPayload
+  orderGroupRefundByOrganizer(input: RefundOrderGroupByOrganizerInput!): OrderPayload
+  orderGroupRefundByAttendee(input: RefundOrderGroupByAttendeeInput!): OrderPayload
+  orderGroupAddProducts(input: OrderGroupProductsInput!): OrderPayload
+  orderReleaseTickets(input: OrderInput!): OrderPayload
+  orderCreateAddToGoogleWalletToken(input: OrderInput!): String
+  walletUpdate(input: UpdateWalletInput!): WalletPayload
+  walletAddGiftCard(input: AddWalletGiftCardInput!): WalletPayload
+  walletRemoveGiftCard(input: RemoveWalletGiftCardInput!): WalletPayload
+  walletAddCreditCard(input: AddWalletCreditCardInput!): WalletPayload
+  walletAddDisneyRewardsCard(input: AddWalletDisneyRewardsCardInput!): WalletPayload
+  walletRemoveDisneyRewardsCard(input: RemoveWalletDisneyRewardsCardInput!): WalletPayload
+  walletUpdateCreditCard(input: UpdateWalletCreditCardInput!): WalletPayload
+  walletSetDefaultCreditCard(input: SetDefaultCreditCardInput!): WalletPayload
+  walletRemoveCreditCard(input: RemoveWalletCreditCardInput!): WalletPayload
+  userLogout(input: LogoutInput): UserPayload
+  userLogin(input: LoginInput!): UserPayload
+  userSetDate(input: DateInput!): UserPayload
+  userSetEmail(input: EmailInput!): UserPayload
+  userSetPhone(input: PhoneInput!): UserPayload
+  userSetLocation(input: UserLocationInput!): UserPayload
+  dismissGlobalNotification: UserPayload
+  dismissTransactionNotification(input: DismissNotificationInput!): UserPayload
+  resetTransactionNotification: UserPayload @deprecated(reason: "10/01/2018 - Use resetTransactionNotifications (plural).")
+  accountCreateAddToGoogleWalletToken: String
+  accountDismissNotification(input: AccountDismissNotificationInput!): AccountPayload
+  resetTransactionNotifications: UserPayload
+  accountMoviesSet(input: MovieInput!): UserPayload
+  accountMoviesDelete(input: MovieInput!): UserPayload
+  theatresSet(input: TheatreInput!): UserPayload
+  theatresDelete(input: TheatreDeleteInput!): UserPayload
+  subscriptionOptIn(input: SubscriptionInput!): UserPayload
+  subscriptionOptInAll(input: SubscriptionOptInAllInput!): UserPayload
+  subscriptionOptOut(input: SubscriptionInput!): UserPayload
+  subscriptionOptOutAll(input: SubscriptionOptOutAllInput!): UserPayload
+  subscriptionBulkUpdate(input: SubscriptionBulkUpdateInput!): UserPayload
+  accountCreate(input: AccountCreateInput!): UserPayload
+  accountUpdate(input: UpdateAccountInput!): UserPayload
+  accountCreateAssociate(input: AccountCreateAssociateInput!): UserPayload
+  accountConversion(input: UpdateAccountInput!): AccountPayload
+  accountRequestCard: AccountPayload
+  accountReportCard: AccountPayload
+  accountAcceptLatestTermsAndConditions: UserPayload
+  accountDeclineLatestTermsAndConditions: UserPayload
+  accountConvertPoints: AccountPayload
+  accountVerify(input: AccountVerifyInput!): AccountPayload
+  accountChangePassword(input: ChangePasswordInput!): SuccessPayload
+  accountDeactivate: SuccessPayload
+  accountPasswordResetRequest(input: EmailInput!): SuccessPayload
+  accountResumeProductSubscription(input: ProductSubscriptionInput!): AccountPayload
+  accountPauseProductSubscription(input: ProductSubscriptionInput!): AccountPayload
+  accountCancelProductSubscription(input: CancelProductSubscriptionInput!): AccountPayload
+  accountPersonality(input: AccountPersonalityInput!): AccountPersonalityPayload
+  accountPasswordReset(input: PasswordResetInput!): UserPayload
+  accountProviderAdd(input: AccountProviderInput!): AccountPayload
+  accountProviderDelete(input: AccountProviderInput!): AccountPayload
+  validateLoyaltyCard(input: CardNumberInput!): SuccessPayload
+  appFeedback(input: AppFeedbackInput!): String
+  faqsFeedbackAnswerRating(input: FaqsFeedbackAnswerRatingInput!): SuccessPayload
+  accountDismissMovieExperience(input: AccountMovieExperienceInput!): AccountPayload
+  accountRateMovie(input: AccountMovieExperienceInput!): AccountPayload
+  accountRateTrailer(input: AccountRateTrailerInput!): AccountPayload
+  friendsAcceptInvitation(input: FriendAcceptInvitationInput!): AccountFriendsPayload
+  friendsCreateInvitation: FriendInvitationPayload
+  friendDelete(input: FriendDeleteInput!): AccountFriendsPayload
+  friendUpdate(input: FriendUpdateInput!): AccountFriendsPayload
+  registerLoyaltyOffer(input: RegisterLoyaltyOfferInput!): SuccessPayload
+  dodDeviceActivation(input: DodDeviceActivationInput!): SuccessPayload @deprecated(reason: "On Demand decommissioned")
+  dodWatchlistUpdate(input: DodWatchlistUpdateInput!): DodProductContextUpdatePayload @deprecated(reason: "On Demand decommissioned")
+  dodProductContextUpdate(input: DodProductContextUpdateInput!): DodProductContextUpdatePayload @deprecated(reason: "On Demand decommissioned")
+  dodRestartContent(input: DodRestartContentInput!): SuccessPayload @deprecated(reason: "On Demand decommissioned")
+  dodSeedlistFulfill(input: DodSeedlistFulfillInput!): SuccessPayload @deprecated(reason: "On Demand decommissioned")
+  addressSuggestions(input: AddressInput!): AddressSuggestionsPayload
+  productSubscriptionCancelPendingDowngrade: AccountProductSubscriptionPayload
+  productSubscriptionToggleEnrollment(input: ProductSubscriptionInput!): AccountPayload
+  privacyRequest(input: PrivacyRequestInput!): SuccessPayload
+  confirmationRequest(input: ConfirmationRequestInput!): SuccessPayload
+  deviceUpdateApplicationToken(input: DeviceUpdateApplicationTokenInput!): SuccessPayload
+  accountProfilePhoto(input: AccountProfilePhotoInput!): AccountPayload
+}
+
+type Navigation implements Node & IErrorDetails {
+  id: ID!
+  children(after: String, first: Int, before: String, last: Int): NavigationConnection
+  external: Boolean
+  key: String
+  modalName: String
+  text: String
+  url: String
+  error: ErrorInfo
+}
+
+type NavigationConnection implements IErrorDetails {
+  id: ID!
+  count: Int
+  edges: [NavigationEdge]
+  pageInfo: PageInfo!
+  error: ErrorInfo
+}
+
+type NavigationEdge {
+  id: ID!
+  cursor: String!
+  node: Navigation
+}
+
+interface Node {
+  id: ID!
+}
+
+type Notification {
+  id: ID!
+  backgroundColor: String
+  dismissable: Boolean
+  messages: [NotificationMessage]
+  css: NotificationCSS @deprecated(reason: "Use backgroundColor")
+  html: NotificationHTML @deprecated(reason: "Use messages")
+}
+
+type NotificationConnection implements IErrorDetails {
+  id: ID!
+  count: Int
+  edges: [NotificationEdge]
+  error: ErrorInfo
+}
+
+type NotificationCSS {
+  id: ID!
+  backgroundColor: String
+}
+
+type NotificationEdge {
+  id: ID!
+  cursor: String!
+  node: Notification
+}
+
+type NotificationHTML {
+  id: ID!
+  desktop: String
+  mobile: String
+}
+
+type NotificationMessage {
+  id: ID!
+  type: String
+  html: String
+  ctas: [CtaType]
+}
+
+enum Operation {
+  AND
+  OR
+}
+
+type Order implements Node & IErrorDetails {
+  id: ID!
+  accountId: Int
+  alternativePaymentsGroup: ChargeGroup
+  areSubscriptionDiscountsWaived: Boolean
+  concessionUpsellItems: [ConcessionUpsellItem]
+  createdDateDisplay: DateDisplay
+  createdDateUtc: DateTime
+  contact: OrderContactInfo
+  displaySubtotal: String
+  displayTaxTotal: String @deprecated(reason: "use taxes field with currency type")
+  displayTotal: String
+  isGiftRedemption: Boolean
+  email: String
+  expirationDateUtc: DateTime
+  fees: [OrderFee]
+  feesTotal: Float
+  groups: [OrderItemGroup]
+  billingAddressRequirement: String
+  hasEstimatedTaxes: Boolean
+  isPhotoIdRequired: Boolean
+  isOrderGroupOrganizer: Boolean
+  isRefunded: Boolean
+  kountSessionId: String
+  loyaltyCardNumber: String
+  loyaltyRewards: OrderLoyaltyRewards
+  notifications: TransactionNotifications
+  notes: String
+  orderId: Int
+  orderGroup: OrderGroup
+  paid: Float
+  paymentGroups: [OrderPaymentGroup]
+  promoCodes: [OrderPromoCode]
+  eligiblePromoCodeTypes: [String]
+  refundedPaymentGroups: [OrderRefundedPaymentGroup]
+  paymentOptions: [String]
+  refundableTotal: Float
+  refundableType: String
+  remainingBalance: Float
+  savings: Float
+  smsNotificationPhoneNumber: String
+  status: String
+  subtotal: Float
+  taxes: Currency
+  ticketCount: Int
+  token: String
+  total: Float
+  totalMinusAlternativePayments: Float
+  transparentPricing: Boolean
+  addresses: [Address]
+  availablePromotions: [Promotion]
+  waivableFeesTotalMinusTax: Currency
+  waivedFees: [OrderFee]
+  waivedFeesTotal: Float
+  error: ErrorInfo
+}
+
+input OrderAddressInput {
+  token: String!
+  address: AddressInput
+}
+
+type OrderConnection implements IErrorDetails {
+  id: ID!
+  count: Int
+  edges: [OrderEdge]
+  pageInfo: PageInfo!
+  error: ErrorInfo
+}
+
+type OrderContactInfo {
+  id: ID!
+  name: String
+  email: String
+  phoneNumber: String
+  organization: String
+}
+
+input OrderCreateInput {
+  accountId: Int
+  affiliateCode: String
+  email: String
+  loyaltyCardNumber: String
+  notes: String
+  products: [ProductSelectionInput]
+  waiveSubscriptionDiscounts: Boolean
+}
+
+type OrderEdge {
+  id: ID!
+  cursor: String!
+  node: Order
+}
+
+type OrderFee {
+  id: ID!
+  cost: Float
+  costIncludesTax: Boolean
+  name: String
+  quantity: Int
+  tax: Float
+}
+
+type OrderGroup implements Node & IErrorDetails {
+  id: ID!
+  attendees: [OrderGroupAttendee]
+  error: ErrorInfo
+}
+
+type OrderGroupAttendee {
+  id: ID!
+  isOrganizer: Boolean
+  name: String
+  orderToken: String
+  productToken: String
+  refundableStatus: OrderItemRefundableStatus
+  ticket: OrderGroupTicket
+}
+
+input OrderGroupInput {
+  showtimeId: Int
+  tickets: [String]
+  attendees: [String]
+  seats: [SeatInput]
+  isOrganizerReserving: Boolean
+  waiveSubscriptionDiscounts: Boolean
+}
+
+input OrderGroupProductsInput {
+  token: String!
+  reservations: OrderGroupInput!
+}
+
+type OrderGroupTicket {
+  id: ID!
+  cost: Currency
+  seatName: String
+  tax: Currency
+  ticketType: String
+  orderItemLineNumber: Int
+}
+
+enum OrderHistoryProductType {
+  ALL
+  CONCESSIONS
+  MEMBERSHIP
+  TICKET
+}
+
+input OrderInput {
+  token: String!
+}
+
+type OrderItem @key(fields: "sku") {
+  charge: Charge
+  components: [OrderItemComponent]
+  cost: Float
+  subscriptionCostChange: TheatreProductCostChange
+  costBeforeDiscounts: Float
+  discounts: [OrderItemDiscount]
+  displayDescription: String
+  canResendGift: Boolean
+  giftMessage: String
+  giftRecipientEmail: String
+  giftRecipientFirstName: String
+  giftRecipientLastName: String
+  fromFirstName: String
+  fromLastName: String
+  hasProductSubscriptionDiscount(subscriptionType: ProductSubscriptionType): Boolean
+  hasDiscountDaysDiscount: Boolean
+  hasTuesdayTicketDiscount: Boolean @deprecated(reason: "Tuesday Ticket decommissioned")
+  hasOnePassDiscount: Boolean
+  id: String
+  lineItems: [OrderItemLineItem]
+  modifiers: [OrderItemModifier]
+  name: String
+  description: String
+  nextBillDate: DateDisplay
+  planTypeDescription: String
+  productSubscriptionDescription: String
+  subscriptionBillingPeriod: String
+  quantifiedDisplayName: String
+  quantity: Int
+  parentCategory: ConcessionCategory
+  sku: String
+  surcharges: [OrderItemSurcharge]
+  orderProductByTheatre(theatreId: Int!): OrderProductByTheatre
+  tax: Float
+  theatre: Theatre
+  tokens: [String]
+  variant: String
+  voucherDurationMonths: Int
+  zoomRoomId: Int
+}
+
+type OrderItemComponent {
+  id: ID!
+  modifiers: [OrderItemModifier]
+  name: String
+  sku: String
+}
+
+type OrderItemDiscount {
+  id: ID!
+  amount: Float
+  description: String
+  discountCharge: Charge
+  discountId: Int
+  promoCode: String
+  discountType: String
+  quantity: Int
+}
+
+type OrderItemGroup implements Node & IErrorDetails {
+  id: ID!
+  additionalCharges: ChargeGroup
+  auditorium: Int
+  canEditQuantity: Boolean
+  cancelledCharges: ChargeGroup
+  concessionsOrderName: String
+  confirmationCode: String
+  confirmationQrCodeUrl: String
+  addTicketToGoogleWalletToken: String @deprecated(reason: "Use the orderCreateAddToGoogleWalletToken mutation instead.")
+  qrCodeDataUrl: String
+  deliverySeatName: String
+  deliveryTimeDisplay: DateTimeDisplay
+  deliveryType: String
+  displayDescription: String
+  displayName: String
+  dodProductContext: DodProductContext @deprecated(reason: "On Demand decommissioned")
+  dodPricing: DodPricing @deprecated(reason: "On Demand decommissioned")
+  fees: [OrderFee]
+  feesTaxTotal: Float
+  feesTotal: Float
+  format: String
+  isReservedSeating: Boolean
+  isZoomRoomProduct: Boolean
+  items: [OrderItem]
+  maxQuantity: Int
+  movie: Movie
+  onDemandProductEntitlementType: String @deprecated(reason: "On Demand decommissioned")
+  onDemandProductResolution: String @deprecated(reason: "On Demand decommissioned")
+  performanceNumber: Int
+  privateShowingMovie: Movie
+  refundedCharges: ChargeGroup
+  refundedConvenienceFees: Float
+  refundedConvenienceFeesTax: Float
+  refundedDeliveryFees: Float
+  refundedDeliveryFeesTax: Float
+  refundedDiscount: Float
+  refundedItemName: String
+  refundedTax: Float
+  refundedTotal: Float
+  reservedSeats: String
+  showtime: Showtime
+  subtotal: Float
+  tax: Float
+  taxDisplayName: String
+  theatre: Theatre
+  total: Float
+  type: String
+  typeDisplayNamePlural: String
+  waivedCharges: ChargeGroup
+  waivedFees: [OrderFee]
+  waivedFeesTaxTotal: Float
+  waivedFeesTotal: Float
+  error: ErrorInfo
+}
+
+type OrderItemLineItem @key(fields: "token") {
+  id: ID!
+  cost: Float
+  refundableDiscount: Float
+  lineNumber: Int
+  refundableStatus: OrderItemRefundableStatus
+  seatName: String
+  tax: Float
+  token: String
+  discounts: [OrderItemDiscount]
+}
+
+type OrderItemModifier {
+  id: ID!
+  name: String
+  cost: Currency
+  tax: Currency
+  sku: String
+  discounts: [OrderItemDiscount]
+}
+
+type OrderItemRefundableStatus implements IErrorDetails {
+  id: ID!
+  isRefunded: Boolean
+  nonSelfServiceRefundableReason: String
+  pickedUp: Boolean
+  selfServiceRefundable: Boolean
+  error: ErrorInfo
+}
+
+type OrderItemSurcharge {
+  id: ID!
+  amount: Float
+  description: String
+  surchargeCharge: Charge
+  surchargeId: Int
+  surchargeType: String
+  quantity: Int
+}
+
+type OrderLoyaltyRewards {
+  id: ID!
+  amountApplied: Currency
+  amountAvailable: Currency
+  canApplyLoyaltyRewards: Boolean!
+  hasAppliedLoyaltyRewards: Boolean!
+  loyaltyRewardsEligible: Boolean!
+}
+
+type OrderPayload {
+  order: Order
+  viewer: Viewer
+}
+
+type OrderPayment {
+  id: ID!
+  amount: Float
+  balance: Float
+  cardNumber: String
+  cardNumberLast4: String
+  externalUserName: String
+  lineItemNumber: Int
+  type: String
+  displayName: String
+}
+
+type OrderPaymentGroup {
+  id: ID!
+  amount: Float
+  balance: Float
+  displayName: String
+  group: String
+  orderToken: String
+  payments: [OrderPayment]
+  error: ErrorInfo
+}
+
+type OrderProductByTheatre {
+  id: ID!
+  hasProductAtSelectedTheatre: Boolean!
+  components: [OrderItemComponent]
+  hasAllModifiersAtSelectedTheatre: Boolean!
+  modifiers: [OrderItemModifier]
+  name: String
+  sku: String
+}
+
+type OrderPromoCode {
+  id: ID
+  code: String!
+  description: String
+  type: String
+  amount: Float
+}
+
+type OrderRefundedPayment {
+  id: ID!
+  amount: Float
+  cardNumberLast4: String
+  externalUserName: String
+  displayAmount: String
+  refundDateUtc: String
+  tenderType: String
+  type: String
+  displayName: String
+}
+
+type OrderRefundedPaymentGroup {
+  id: ID
+  group: String
+  isPending: Boolean
+  orderToken: String
+  refundDate: DateDisplay
+  refundDateUtc: String
+  refundStatus: String
+  refundedPayments: [OrderRefundedPayment]
+  status: String
+  error: ErrorInfo
+}
+
+type PageInfo {
+  id: ID!
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+input PasswordResetInput {
+  token: String!
+  email: String!
+  newPassword: String!
+  captcha: String
+  captchaType: CaptchaType
+}
+
+type PayloadCTA {
+  id: ID!
+  variant: PayloadCTAVariant
+  link: PayloadLink
+}
+
+enum PayloadCTAVariant {
+  red
+  white
+  outline
+  blueLink
+  whiteLink
+}
+
+type PayloadHomepageTakeover {
+  id: ID!
+  title: String!
+  takeoverLinkUrl: String
+  appAssetUrl: String
+  mobileAssetUrl: String @deprecated(reason: "Removed in current app versions. Use appAssetUrl.")
+  desktopAssetUrl: String @deprecated(reason: "Removed in current app versions. Use appAssetUrl.")
+}
+
+type PayloadImage {
+  id: ID!
+  file: PayloadImageFile
+}
+
+type PayloadImageFile {
+  id: ID!
+  url: String
+  path: String
+}
+
+type PayloadLink {
+  id: ID!
+  label: String
+  href: String
+  type: PayloadLinkTypeBlockType
+}
+
+enum PayloadLinkTypeBlockType {
+  urlLink
+  modalLink
+}
+
+enum PaymentTenderType {
+  CreditCard
+  GiftCard
+  AmcStubsCard
+  GroupSalesInvoice
+  DisneyRewardDollars
+  GiftCardAListVoucher
+}
+
+type PaymentVendor implements Node & IErrorDetails {
+  id: ID!
+  clientToken: String
+  error: ErrorInfo
+}
+
+type PeeTime {
+  cue: String
+  hasExtras: Boolean
+  isFirst5: Boolean
+  isMeta: Boolean
+  length: Int
+  meta: String
+  plot: String
+  runningTime: Int
+  time: Int
+  title: String
+}
+
+type PeeTimeConnection implements IErrorDetails {
+  id: ID!
+  count: Int
+  edges: [PeeTimeEdge]
+  pageInfo: PageInfo!
+  error: ErrorInfo
+}
+
+type PeeTimeEdge {
+  id: ID!
+  cursor: String!
+  node: PeeTime
+}
+
+input PhoneInput {
+  phone: String!
+}
+
+input PrivacyRequestInput {
+  firstName: String!
+  lastName: String!
+  emailAddress: String!
+  loyaltyCardNumber: String
+  requestType: PrivacyRequestType!
+  captcha: String
+  captchaType: CaptchaType
+}
+
+enum PrivacyRequestType {
+  DELETE
+  REQUEST
+}
+
+type PrivateRentalGuestCap {
+  id: ID!
+  name: String
+  max: Int
+  min: Int
+}
+
+type PrivateShowingMovie implements Node & IErrorDetails {
+  id: ID!
+  movieName: String
+  sku: String
+  movie: Movie
+  internalReleaseNumber: Int
+  price: Currency
+  priceBreakdown: String
+  convenienceFee: Currency
+  priceWithFees: Currency
+  error: ErrorInfo
+}
+
+type Product implements Node & IErrorDetails {
+  id: ID!
+  cost: Float
+  previousCost: Float
+  sku: String
+  tax: Float
+  error: ErrorInfo
+}
+
+interface ProductAttribute {
+  id: ID!
+  code: String
+  description: String
+  name: String
+  valueDescription: String
+}
+
+type ProductAttributeDate implements ProductAttribute {
+  id: ID!
+  code: String
+  description: String
+  name: String
+  value: DateDisplay
+  valueDescription: String
+}
+
+type ProductAttributeInt implements ProductAttribute {
+  id: ID!
+  code: String
+  description: String
+  name: String
+  value: Int
+  valueDescription: String
+}
+
+type ProductAttributes {
+  id: ID!
+  basePrice: ProductAttributeString
+  commitmentMonths: ProductAttributeInt
+  endDate: ProductAttributeDate
+  futureReservationCap: ProductAttributeInt
+  minimumAge: ProductAttributeInt
+  movieFilmWeekCap: ProductAttributeInt
+  movieMonthCap: ProductAttributeInt
+  outOfTierVisitsCap: ProductAttributeInt
+  plfFilmWeekCap: ProductAttributeInt
+  plfMonthCap: ProductAttributeInt
+  priceLockDate: ProductAttributeDate
+  priceLockDurationMonths: ProductAttributeInt
+  usageTier: ProductAttributeInt
+}
+
+type ProductAttributeString implements ProductAttribute {
+  id: ID!
+  code: String
+  description: String
+  name: String
+  value: String
+  valueDescription: String
+}
+
+input ProductSelectionInput {
+  sku: String!
+  quantity: Int!
+  tokens: [String!]
+  voucherToken: String
+  row: Int
+  column: Int
+  components: [ComponentSelectionInput]
+  concessionsOrderName: String
+  deliverySeatName: String
+  deliveryShowtimeId: Int
+  deliveryTime: DateTime
+  deliveryType: DeliveryType
+  fromFirstName: String
+  fromLastName: String
+  intendedAttendance: Int
+  message: String
+  modifiers: [ModifierSelectionInput]
+  privateShowingMovieId: Int
+  privateShowingInternalReleaseNumber: Int
+  recipientAddress: String
+  recipientFirstName: String
+  recipientLastName: String
+  referralCode: String
+}
+
+input ProductsInput {
+  token: String!
+  products: [ProductSelectionInput]!
+  waiveSubscriptionDiscounts: Boolean
+}
+
+type ProductSubscriptionCounters {
+  id: ID!
+  futureReservationCap: ProductSubscriptionTicketCounter
+  movieFilmWeekCap: ProductSubscriptionTicketCounter
+  movieMonthCap: ProductSubscriptionTicketCounter
+  outOfTierVisitsCap: ProductSubscriptionTicketCounter
+  plfFilmWeekCap: ProductSubscriptionTicketCounter
+  plfMonthCap: ProductSubscriptionTicketCounter
+}
+
+type ProductSubscriptionDiscountEligibility implements IErrorDetails {
+  id: ID!
+  isEligible: Boolean
+  isOutOfTier: Boolean
+  error: ErrorInfo
+}
+
+input ProductSubscriptionInput {
+  pauseDuration: Int
+  subscriptionType: ProductSubscriptionType
+}
+
+type ProductSubscriptionPauseOptions {
+  id: ID!
+  canResume: Boolean
+  canPause: Boolean
+  forcedReactivationDate: DateDisplay
+}
+
+type ProductSubscriptionPendingTransfer {
+  id: ID!
+  canCancelTransfer: Boolean
+  cost: Currency
+  productAttributes: ProductAttributes
+  planTypeDescription: String
+  productTypeDescription: String
+  startDate: DateDisplay
+  productSubscription(subscriptionType: ProductSubscriptionType): AccountProductSubscription @deprecated(reason: "Relevant fields are now hoisted to ProductSubscriptionPendingTransfer")
+}
+
+type ProductSubscriptionStatusChangeReason {
+  description: String
+  name: String
+  reasonId: Int
+}
+
+type ProductSubscriptionTicket {
+  id: ID!
+  event: AccountEvent
+  isPast: Boolean
+  movie: Movie
+  order: Order
+  showDateTimeDisplay: DateTimeDisplay
+  theatre: Theatre
+  titleName: String
+}
+
+type ProductSubscriptionTicketCounter {
+  id: ID!
+  current: Int
+  max: Int
+  tickets: [ProductSubscriptionTicket]
+}
+
+enum ProductSubscriptionTier {
+  AList
+  AListClassic
+}
+
+type ProductSubscriptionTransfer implements Node & IErrorDetails {
+  id: ID!
+  transferProducts(slug: String): [ProductSubscriptionTransferProduct]
+  error: ErrorInfo
+}
+
+type ProductSubscriptionTransferMessage {
+  href: String
+  message: String
+}
+
+type ProductSubscriptionTransferProduct {
+  id: ID!
+  isCurrentTier: Boolean
+  isEligible: Boolean
+  product: TheatreProduct
+  transferCost: Float
+  transferDisplayCost: String
+  transferMessage: ProductSubscriptionTransferMessage
+  typeCode: String
+}
+
+enum ProductSubscriptionType {
+  A_LIST
+  PREMIERE
+}
+
+input PromoCodeInput {
+  token: String!
+  code: String!
+  pin: String
+  type: String
+}
+
+type Promotion implements Node & IErrorDetails {
+  id: ID!
+  active: String
+  backgroundImageUrl: String
+  callsToAction: [CallsToAction]
+  description: String
+  digitalUpsellTitle: Movie @deprecated(reason: "On Demand decommissioned")
+  digitalSwapTitles: [Movie] @deprecated(reason: "On Demand decommissioned")
+  endDateTime: DateTime
+  eyebrow: String
+  isPromotionDisplayable: Boolean
+  media: PromotionMedia
+  mobile: Boolean
+  mobilePromoImageUrl: String
+  promoImageUrl: String
+  promotionId: Int
+  startDateTime: DateTime
+  title: String
+  typeId: Int
+  typeName: String
+  website: Boolean
+  weight: Float
+  error: ErrorInfo
+}
+
+type PromotionMedia {
+  id: ID!
+  backgroundImageUrl: String
+  mobilePromoImageUrl: String
+  promoImageUrl: String
+}
+
+type Promotions implements Node & IErrorDetails {
+  id: ID!
+  items: [Promotion]
+  error: ErrorInfo
+}
+
+type Query {
+  node(id: ID!): Node
+  viewer: Viewer
+}
+
+type QuickAddConcessions {
+  targetedConcessionsDocId: String
+  deliveryType: DeliveryType
+  items: [Concession]
+}
+
+input RefundOrderGroupByAttendeeInput {
+  orderToken: String!
+}
+
+input RefundOrderGroupByOrganizerInput {
+  orderItemLineNumbers: [Int]
+  organizerOrderToken: String!
+  orderGroupTokens: [String]
+  refundEntireOrderGroup: Boolean
+}
+
+input RefundOrderInput {
+  token: String!
+  lineNumbers: [String]
+}
+
+input RegisterLoyaltyOfferInput {
+  campaignName: String!
+  email: String
+  loyaltyNumber: String
+  memberId: String
+}
+
+type RelatedBlog implements Node {
+  id: ID!
+  imageUrl: String
+  priorityTag: String
+  publishedOn: String
+  publishedText: String
+  title: String!
+  url: String!
+}
+
+type RelatedBlogConnection implements IErrorDetails {
+  id: ID!
+  count: Int
+  edges: [RelatedBlogEdge]
+  pageInfo: PageInfo!
+  error: ErrorInfo
+}
+
+type RelatedBlogEdge {
+  id: ID!
+  cursor: String!
+  node: RelatedBlog
+}
+
+type RelatedVideo implements Node & IErrorDetails {
+  id: ID!
+  contentType: String
+  creationDateUtc: DateTime
+  duration: Float
+  externalId: String
+  longDescription: String
+  movie: Movie
+  name: String
+  shortDescription: String
+  thumbnailUrl: String
+  error: ErrorInfo
+}
+
+type RelatedVideoConnection implements IErrorDetails {
+  id: ID!
+  pageInfo: PageInfo!
+  edges: [RelatedVideoEdge]
+  count: Int
+  error: ErrorInfo
+}
+
+type RelatedVideoEdge {
+  id: ID!
+  node: RelatedVideo
+  cursor: String!
+}
+
+input RemoveWalletCreditCardInput {
+  merchantToken: String!
+}
+
+input RemoveWalletDisneyRewardsCardInput {
+  number: String!
+}
+
+input RemoveWalletGiftCardInput {
+  token: String!
+}
+
+input ResetSeatsInput {
+  token: String!
+  theatreId: Int!
+  performanceNumber: Int!
+}
+
+enum ResourceType {
+  SHOWTIME
+  MOVIE
+  THEATRE
+}
+
+type Reward {
+  id: ID!
+  amount: Float
+  daysToExpire: Int
+  expirationDate: Date
+  comment: String
+}
+
+type RewardSummary implements Node & IErrorDetails {
+  id: ID!
+  pendingPoints: Int
+  concessionUpgrades: Int
+  freeConcessionUpgrades: Float
+  freeOnlineFeesWaived: Float
+  freeSpend: Int
+  giveawaySavings: Float
+  lifetimeRewardsEarned: Float
+  onlineFeesWaived: Float
+  rewardsBalance: Float
+  savingsToDate: Float @deprecated(reason: "Use savingsToDateFormatted")
+  savingsToDateFormatted: Currency
+  spendToNextReward: Float
+  sweepstakes: Int
+  totalSpent: Float
+  pointsToNextReward: Int
+  pointsGoalToActivateReward: Int
+  pointBalance: Int
+  pointsPerDollar: String
+  currentActiveYearVisits: Int
+  visitsToNextGoal: Int
+  progressMessage: String
+  expirationsTotal: Float
+  bonusBucksTotal: Float
+  rewardsToActivate: Float
+  expirations: [Reward]
+  bonusBucks: [Reward]
+  birthdayOffers: [Reward]
+  prepaidEvents: [Reward]
+  offers: [Reward]
+  passes: [Reward]
+  currencyRewards: [Reward]
+  qualifyingPremiereGoVisits: Int
+  remainingPremiereGoVisits: Int
+  qualifyingPremiereGoPoints: Int
+  remainingPremiereGoPoints: Int
+  error: ErrorInfo
+}
+
+type RottenTomatoesRating {
+  id: ID!
+  audienceRating: RottenTomatoesRatings
+  audienceRatingDescription: String
+  audienceRatingImageUrl: String
+  audienceScore: Int
+  criticsRating: RottenTomatoesRatings
+  criticsRatingDescription: String
+  criticsRatingImageUrl: String
+  criticsScore: Int
+  movieUrl: String
+  siteName: String
+}
+
+enum RottenTomatoesRatings {
+  FRESH
+  CERTIFIED_FRESH
+  UPRIGHT
+  SPOILED
+  ROTTEN
+}
+
+type Search {
+  id: ID!
+  absoluteUrl: String
+  blogpost: BlogPost
+  description: String
+  hasOnDemandProducts: Boolean @deprecated(reason: "On Demand decommissioned")
+  isAdvanced: Boolean
+  isComingSoon: Boolean
+  isNowPlaying: Boolean
+  mediaUrl: String
+  movie: Movie
+  movieId: Int
+  pageTitle: String
+  score: Float
+  theatre: Theatre
+  theatreId: Int
+  title: String
+  type: String
+  url: String
+}
+
+type SearchConnection implements IErrorDetails {
+  id: ID!
+  count: Int
+  edges: [SearchEdge]
+  pageInfo: PageInfo!
+  error: ErrorInfo
+}
+
+type SearchEdge {
+  id: ID!
+  cursor: String!
+  node: Search
+}
+
+enum SearchType {
+  all
+  blogpost
+  comingsoon
+  faq
+  nowplaying
+  ondemand @deprecated(reason: "On Demand decommissioned")
+  page
+  theatre
+}
+
+type Seat {
+  id: ID!
+  available: Boolean
+  column: Int
+  name: String
+  row: Int
+  seatTier: String
+  shouldDisplay: Boolean
+  type: String
+  seatStatus: String
+  zone: SeatingZone
+}
+
+type SeatingLayout implements Node & IErrorDetails {
+  id: ID!
+  columns: Int
+  rows: Int
+  seats: [Seat]
+  isZoned: Boolean
+  zones: [SeatingZone]
+  error: ErrorInfo
+}
+
+type SeatingZone {
+  id: ID!
+  zoneNumber: Int
+  type: SeatingZoneType
+  name: String
+  order: Int
+  surchargeAmount: Float
+  discountAmount: Float
+}
+
+enum SeatingZoneType {
+  STANDARD
+  VALUE
+  PREFERRED
+}
+
+input SeatInput {
+  row: Int
+  column: Int
+}
+
+input SeatSelectionInput {
+  sku: String!
+  token: String!
+  row: Int!
+  column: Int!
+}
+
+type SelectableDates implements Node {
+  id: ID!
+  dates: [Date!]!
+  selected: Date
+}
+
+input SelectSeatsInput {
+  token: String!
+  products: [SeatSelectionInput]!
+}
+
+input SendSmsInput {
+  token: String!
+  phone: String!
+  groups: [SkuInput]
+}
+
+input SetDefaultCreditCardInput {
+  merchantToken: String!
+}
+
+type ShareShowtime {
+  id: ID!
+  url: String
+}
+
+type Showtime implements Node & IErrorDetails {
+  id: ID!
+  attributes(type: AttributeType, groups: [AttributeGroupType], resourceTypes: [ResourceType], after: String, first: Int, before: String, last: Int): AttributeConnection
+  auditorium: Int
+  businessDate: String
+  calendarLinks: [CtaType]
+  display: DateTimeDisplay
+  displayConvenienceFees: Boolean
+  format: ShowtimeMovieFormat
+  isAlmostSoldOut: Boolean @deprecated
+  isDiscountDaysEligible: Boolean
+  isPrivateRental: Boolean
+  isProductSubscriptionDiscountEligible: Boolean @deprecated(reason: "Use productSubscriptionDiscountEligibility")
+  isReservedSeating: Boolean
+  isSoldOut: Boolean @deprecated
+  isDiscountMatineePriced: Boolean
+  hasTrailers: Boolean
+  discountMatineeMessage: String
+  movie: Movie
+  notifications: TransactionNotifications
+  performanceNumber: Int
+  prices: [TicketPrice]
+  maximumIntendedAttendance: Int
+  privateRentalGuestCap: PrivateRentalGuestCap @deprecated(reason: "Use maximumIntendedAttendance")
+  privateShowingMovies: [PrivateShowingMovie]
+  productSubscriptionDiscountEligibility: ProductSubscriptionDiscountEligibility
+  seatingLayout: SeatingLayout
+  sellUntil: DateTime @deprecated
+  showDateTimeUtc: DateTime
+  showtimeHasPassed: Boolean @deprecated(reason: "Use ShowtimeAvailabilities.PAST_SELL_DATE")
+  showtimeId: Int
+  policyCodes: [String]
+  status: String
+  theatre: Theatre
+  timezone: String
+  utcOffset: String
+  when: DateTime
+  shareShowtime: ShareShowtime
+  error: ErrorInfo
+}
+
+type ShowtimeAttributeGroup implements Node & IErrorDetails {
+  id: ID!
+  showtimeGroupHeadingAttribute: Attribute
+  attributes(groups: [AttributeGroupType], type: AttributeType, after: String, first: Int, before: String, last: Int): AttributeConnection
+  movie: Movie
+  showtimes(after: String, first: Int, before: String, last: Int, filter: ShowtimeFilterInput): ShowtimeConnection
+  uniqueAttributes(groups: [AttributeGroupType], type: AttributeType, after: String, first: Int, before: String, last: Int): AttributeConnection
+  error: ErrorInfo
+}
+
+type ShowtimeAttributeGroupConnection implements IErrorDetails {
+  id: ID!
+  commonAttributes(groups: [AttributeGroupType], type: AttributeType, after: String, first: Int, before: String, last: Int): AttributeConnection
+  count: Int
+  edges: [ShowtimeAttributeGroupEdge]
+  pageInfo: PageInfo!
+  error: ErrorInfo
+}
+
+type ShowtimeAttributeGroupEdge {
+  id: ID!
+  cursor: String!
+  node: ShowtimeAttributeGroup
+}
+
+enum ShowtimeAvailability {
+  SOLD_OUT
+  COMING_SOON
+  ALMOST_SOLD_OUT
+  SELLABLE
+  PAST_SELL_DATE
+  CANCELED
+}
+
+type ShowtimeConnection implements IErrorDetails {
+  id: ID!
+  count: Int
+  edges: [ShowtimeEdge]
+  pageInfo: PageInfo!
+  error: ErrorInfo
+}
+
+type ShowtimeEdge {
+  id: ID!
+  cursor: String!
+  node: Showtime
+}
+
+input ShowtimeFilterInput {
+  excludeStatus: [ShowtimeAvailability]
+  includeStatus: [ShowtimeAvailability]
+}
+
+type ShowtimeMovie implements Node & IErrorDetails {
+  id: ID!
+  movie: Movie
+  theatres: [ShowtimeTheatre]
+  error: ErrorInfo
+}
+
+type ShowtimeMovieFormat implements Node & IErrorDetails {
+  id: ID!
+  attributes: [Attribute]
+  groups(after: String, first: Int, before: String, last: Int): ShowtimeAttributeGroupConnection
+  movie: Movie
+  error: ErrorInfo
+}
+
+type ShowtimeMovieFormats implements Node & IErrorDetails {
+  id: ID!
+  attributeFilter: String
+  date: Date
+  hasScheduledShowtimes: Boolean!
+  items: [ShowtimeMovieFormat]
+  movieId: Int
+  theatreId: Int
+  error: ErrorInfo
+}
+
+type ShowtimeMovies implements Node & IErrorDetails {
+  id: ID!
+  filterableAttributes(groups: [AttributeGroupType], type: AttributeType, after: String, first: Int, before: String, last: Int): AttributeConnection
+  items: [ShowtimeMovie]
+  error: ErrorInfo
+}
+
+type ShowtimePolicy {
+  id: ID!
+  name: String
+  description: String
+  code: String
+}
+
+type ShowtimeTheatre implements Node & IErrorDetails {
+  id: ID!
+  formats: ShowtimeMovieFormats
+  theatre: Theatre
+  error: ErrorInfo
+}
+
+type ShowtimeViewedTrailer {
+  id: ID!
+  video: Media
+  movie: Movie
+  rating: Int
+  error: ErrorInfo
+}
+
+input SkuInput {
+  sku: String!
+}
+
+type State implements Node & IErrorDetails {
+  id: ID!
+  name: String
+  abbreviation: String
+  slug: String
+  cities(after: String, first: Int, before: String, last: Int): CityConnection
+  theatres(after: String, first: Int, before: String, last: Int): TheatreConnection
+  subscriptionUsageLevel: Int
+  error: ErrorInfo
+}
+
+type StateConnection implements IErrorDetails {
+  id: ID!
+  pageInfo: PageInfo!
+  edges: [StateEdge]
+  count: Int
+  error: ErrorInfo
+}
+
+type StateEdge {
+  id: ID!
+  node: State
+  cursor: String!
+}
+
+type Stub implements Node & IErrorDetails {
+  id: ID!
+  dateDisplay: DateTimeDisplay
+  genre: String
+  isNew: Boolean
+  movie: Movie
+  name: String
+  numberOfTickets: Int
+  order: Order
+  owner: String
+  sortName: String
+  startDateTimeLocal: Date
+  startDateTimeUtc: Date
+  stubId: Int
+  theatre: Theatre
+  theatreName: String
+  theatreWebSite: String
+  url: String
+  error: ErrorInfo
+}
+
+type StubConnection implements IErrorDetails {
+  id: ID!
+  pageInfo: PageInfo!
+  edges: [StubEdge]
+  count: Int
+  error: ErrorInfo
+}
+
+type StubEdge {
+  id: ID!
+  node: Stub
+  cursor: String!
+}
+
+type Subscribers implements Node & IErrorDetails {
+  id: ID!
+  ids: [Int]
+  error: ErrorInfo
+}
+
+enum SubscribersSearchType {
+  AmcAccountId
+  EmailAddressText
+  LoyaltyAccountId
+  LoyaltyCardNumber
+}
+
+type Subscription implements Node & IErrorDetails {
+  id: ID!
+  channels: [SubscriptionChannel]
+  description: String
+  name: String
+  error: ErrorInfo
+}
+
+input SubscriptionBulkUpdateInput {
+  items: [SubscriptionBulkUpdateItemInput]!
+}
+
+input SubscriptionBulkUpdateItemInput {
+  name: String!
+  channel: SubscriptionChannelType!
+  identifier: String!
+  enrolled: Boolean!
+}
+
+type SubscriptionChannel implements Node & IErrorDetails {
+  id: ID!
+  audience: String
+  enrolled: Boolean
+  identifier: String
+  pending: Boolean
+  type: SubscriptionChannelType
+  error: ErrorInfo
+}
+
+enum SubscriptionChannelType {
+  email
+  sms
+  device
+  paidmedia
+}
+
+input SubscriptionInput {
+  name: String!
+  channel: SubscriptionChannelType!
+  identifier: String
+}
+
+input SubscriptionOptInAllInput {
+  channel: SubscriptionChannelType!
+  identifier: String
+}
+
+input SubscriptionOptOutAllInput {
+  identifier: String
+  channel: SubscriptionChannelType
+}
+
+type Subscriptions implements Node & IErrorDetails {
+  id: ID!
+  emailAddress: String
+  hasSubscription(name: String!, channel: String): Boolean
+  items: [Subscription]
+  error: ErrorInfo
+}
+
+enum SubscriptionType {
+  all
+  guest
+  loyalty
+}
+
+type SuccessPayload {
+  success: Boolean
+}
+
+type Tags implements Node & IErrorDetails {
+  id: ID!
+  popular: [String]
+  error: ErrorInfo
+}
+
+type TagType {
+  id: ID!
+  name: String
+  priority: Boolean
+}
+
+type TemplatedPromotion implements Node & IErrorDetails {
+  id: ID!
+  content: TemplatedPromotionContent
+  assets: TemplatedPromotionAssets
+  blockType: String
+  error: ErrorInfo
+}
+
+type TemplatedPromotionAssets {
+  id: ID!
+  desktop: TemplatedPromotionPlatformAssets
+  mobile: TemplatedPromotionPlatformAssets
+  video: TemplatedPromotionVideoAsset
+}
+
+type TemplatedPromotionContent {
+  id: ID!
+  eyebrow: String
+  heading: String
+  plainTextCopy: String
+  ctas: [PayloadCTA]
+}
+
+type TemplatedPromotionPlatformAssets {
+  id: ID!
+  image: PayloadImage
+  background: PayloadImage
+}
+
+type TemplatedPromotionVideoAsset {
+  id: ID!
+  externalId: String
+  videoUrl: String
+}
+
+type TermsAndConditions implements Node & IErrorDetails {
+  id: ID!
+  summary: String
+  text: String
+  version: Int
+  error: ErrorInfo
+}
+
+enum TermsAndConditionsType {
+  Associate
+  Insider
+  ProductSubscription
+  Premiere
+}
+
+type Theatre implements Node & ITheatre & IErrorDetails {
+  id: ID!
+  absoluteWebsiteUrl: String
+  addressLine1: String
+  addressLine2: String
+  attributes(groups: [AttributeGroupType], resourceTypes: [ResourceType], type: AttributeType, after: String, first: Int, before: String, last: Int): AttributeConnection
+  brand: String
+  city: String
+  citySlug: String
+  concessionQuickAdd: Concession @deprecated(reason: "Use quickAddConcessions instead.")
+  quickAddConcessions(target: String!, orderToken: String, showtimeId: Int): [QuickAddConcessions]
+  dtsShowtimes(orderToken: String!, deliveryDate: Date!, auditorium: Int!): [Showtime]
+  concessionOrderFees: [ConcessionOrderFee]
+  concessionTimes(showtimeId: Int, pickupDate: Date, orderId: Int): ConcessionTimes
+  concessions: Concessions
+  deliveryToSeat: Boolean
+  directionsUrl: String
+  distance: Float
+  facebookUrl: String
+  favoriteSequence: Int
+  formats(movieId: Int): ShowtimeMovieFormats
+  guestServicesPhoneNumber: String
+  hasMultipleKitchens: Boolean
+  icon: String
+  images(contentType: ContentType, after: String, first: Int, before: String, last: Int): MediaConnection
+  isFavorite: Boolean
+  isInOutage: Boolean
+  isSelected: Boolean
+  latitude: Float
+  longName: String
+  longitude: Float
+  loyaltyVersion: TheatreLoyaltyVersion
+  marketName: String
+  marketSlug: String
+  movies(movieId: Int, after: String, first: Int, before: String, last: Int, sort: Boolean): TheatreMovieConnection
+  name: String
+  onlineConcessions: Boolean
+  outageDescription: String
+  postalCode: String
+  products(sku: String!): TheatreProducts
+  productSubscriptions(subscriptionType: ProductSubscriptionType): TheatreProducts
+  promotions: [TemplatedPromotion]
+  secondaryLongName: String
+  slug: String
+  state: String
+  stateCode: String
+  stateSlug: String
+  subscriptionUsageLevel: Int
+  theatreId: Int
+  thumbnail: String
+  ticketable: Boolean
+  timezoneAbbreviation: String
+  transparentPricing: Boolean
+  utcOffset: String
+  websiteUrl: String
+  error: ErrorInfo
+}
+
+type TheatreBrand implements Node & IErrorDetails {
+  id: ID!
+  name: String
+  headline: String
+  copy: String
+  defaultBgImageUrl: String
+  bgImageUrl: String
+  isParallax: Boolean
+  isReversed: Boolean
+  images(contentType: ContentType, after: String, first: Int, before: String, last: Int): MediaConnection
+  error: ErrorInfo
+}
+
+type TheatreConnection implements IErrorDetails {
+  id: ID!
+  pageInfo: PageInfo!
+  edges: [TheatreEdge]
+  count: Int
+  error: ErrorInfo
+}
+
+input TheatreDeleteInput {
+  theatreId: Int!
+}
+
+type TheatreEdge {
+  id: ID!
+  node: Theatre
+  cursor: String!
+}
+
+input TheatreInput {
+  theatreId: Int!
+  sequence: Int
+}
+
+enum TheatreLoyaltyVersion {
+  V1
+  V2
+}
+
+type TheatreMovie implements Node & IMovie & IErrorDetails {
+  id: ID!
+  absoluteWebsiteUrl: String
+  accountMovieDetails: AccountMovie
+  appUrl: String
+  attributes(groups: [AttributeGroupType], type: AttributeType, after: String, first: Int, before: String, last: Int): AttributeConnection
+  castAndCrew(after: String, first: Int, before: String, last: Int): CastAndCrewConnection
+  directors: String
+  dodPricing(userContextualPricing: Boolean): [DodPricing] @deprecated(reason: "On Demand decommissioned")
+  dodProduct: DodProduct @deprecated(reason: "On Demand decommissioned")
+  dodProductContext: DodProductContext @deprecated(reason: "On Demand decommissioned")
+  dodSimilarMovies: MovieConnection @deprecated(reason: "On Demand decommissioned")
+  formats: ShowtimeMovieFormats
+  genre: String
+  image(contentType: ContentType!): Media
+  images(contentType: ContentType, after: String, first: Int, before: String, last: Int): MediaConnection
+  isPrivateRental: Boolean
+  isProductSubscriptionEligible(subscriptionType: ProductSubscriptionType): Boolean
+  isReleased: Boolean
+  isTitleSpecificPrivateRental: Boolean
+  distributorId: Int
+  distributorCode: String
+  movieId: Int
+  mpaaRating: String
+  name: String
+  onlineTicketAvailabilityDateUtc: DateTime
+  peeTimes(after: String, first: Int, before: String, last: Int): PeeTimeConnection
+  preferredPoster: Media
+  preferredTrailer: Media
+  promotions: Promotions
+  ratings: MovieRatings
+  relatedBlogs(after: String, first: Int, before: String, last: Int): RelatedBlogConnection
+  relatedVideos(contentType: ContentType, after: String, first: Int, before: String, last: Int): MediaConnection
+  releaseDateDisplay: DateDisplay
+  releaseDateUtc: Date
+  runTime: Int
+  secondaryGenre: String
+  shortSynopsis: String
+  slug: String
+  sortableName: String
+  starringActors: String
+  status: MovieStatus
+  synopsis: String
+  synopsisTagLine: String
+  synopsisTitle: String
+  theatres(after: String, first: Int, before: String, last: Int): TheatreConnection
+  video(contentType: ContentType!): Media
+  videos(contentType: ContentType, after: String, first: Int, before: String, last: Int): MediaConnection
+  vuduUrl: String
+  websiteUrl: String
+  canPrequeue: Boolean @deprecated(reason: "Queueit moved to cloudflare edge workers")
+  queueEventId: String @deprecated(reason: "Queueit moved to cloudflare edge workers")
+  error: ErrorInfo
+}
+
+type TheatreMovieConnection implements IErrorDetails {
+  id: ID!
+  attributes(groups: [AttributeGroupType], type: AttributeType, after: String, first: Int, before: String, last: Int): AttributeConnection
+  count: Int
+  edges: [TheatreMovieEdge]
+  pageInfo: PageInfo!
+  error: ErrorInfo
+}
+
+type TheatreMovieEdge {
+  id: ID!
+  cursor: String!
+  node: TheatreMovie
+}
+
+type TheatreProduct {
+  id: ID!
+  cost: Float
+  description: String
+  planTypeDescription: String
+  previousCost: Float
+  subscriptionCostChange: TheatreProductCostChange
+  productAttributes: ProductAttributes
+  sku: String
+  tax: Float
+  termsAndConditionsUrl: String
+}
+
+type TheatreProductCostChange {
+  id: ID!
+  cost: Float
+  pricingAnnotation: String
+  nowIsAfterStartDate: Boolean
+  startDate: DateDisplay
+  effectiveDate: DateDisplay
+}
+
+type TheatreProducts implements Node & IErrorDetails {
+  id: ID!
+  items: [TheatreProduct]
+  error: ErrorInfo
+}
+
+type TicketPrice {
+  id: ID!
+  agePolicy: String
+  convenienceFee: Float
+  price: Float
+  priceWithFees: Float
+  priceBreakdown: String
+  priceWithoutTax: Float
+  sku: String
+  tax: Float
+  type: String
+}
+
+type TransactionNotificationMessage {
+  id: ID!
+  href: String
+  message: String
+  notificationId: String
+  messageCode: Int
+}
+
+type TransactionNotifications {
+  id: ID!
+  messages: [TransactionNotificationMessage]
+}
+
+input UpdateAccountInput {
+  address1: String
+  address2: String
+  referralCode: String
+  alias: String
+  cardNumber: String
+  city: String
+  displayName: String
+  email: String
+  firstName: String
+  gender: String
+  isPublic: Boolean
+  isShareholder: Boolean
+  lastName: String
+  middleInitial: String
+  phone: String
+  postalCode: String
+  state: String
+  subscriptions: [AccountSubscriptionInput]
+  theatreId: Int
+  captcha: String
+  captchaType: CaptchaType
+}
+
+input UpdateOrderInput {
+  token: String!
+  accountId: Int
+  address: AddressInput
+  email: String
+  contact: ZoomRoomContactInput
+  notes: String
+  loyaltyCardNumber: String
+  redirectUrl: String
+  autoRedirect: Boolean
+  smsNotificationPhoneNumber: String
+}
+
+input UpdateWalletCreditCardInput {
+  default: Boolean!
+  name: String!
+  expirationMonth: Int
+  expirationYear: Int
+  cardHolderFirstName: String
+  cardHolderLastName: String
+  cardHolderEmail: String
+  address1: String
+  address2: String
+  city: String
+  state: String
+  postalCode: String
+  merchantToken: String!
+  verificationNonce: String!
+  deviceData: String
+}
+
+input UpdateWalletInput {
+  loyaltyAutoSpend: Boolean
+  giftCardPreferredTender: Boolean
+  disneyRewardsCardPreferredTender: Boolean
+}
+
+scalar Upload
+
+type UpsellGroup {
+  name: String
+  upsellConcessions: [Concession]
+}
+
+scalar USD
+
+type User implements Node & IErrorDetails {
+  id: ID!
+  account: Account
+  authToken: String
+  sessionId: String
+  nonce: String
+  lastLocations: UserLocations
+  lastViewedDate: Date
+  lastEmail: String
+  lastPhone: String
+  selectedTheatre: Theatre
+  featureFlagsId: String
+  customerService: CustomerService
+  theatres(type: UserTheatreType, includeAttributes: [String], excludeAttributes: [String], operation: String, after: String, first: Int, before: String, last: Int): TheatreConnection
+  movies(date: Date, movieSlug: String, theatreSlug: String, attribute: String): ShowtimeMovies
+  subscriptions(identifier: String, type: SubscriptionType): Subscriptions
+  globalNotificationsDismissed: Boolean
+  transactionNotificationsDismissed: Boolean @deprecated(reason: "10/01/2018 - Transaction notifications will be removed as they are dismissed.")
+  subscribers(query: String, type: SubscribersSearchType): Subscribers
+  paymentVendor: PaymentVendor
+  error: ErrorInfo
+}
+
+type UserLocation {
+  id: ID!
+  createdDate: DateTime
+  location: Geocoordinate
+  type: UserLocationType
+}
+
+input UserLocationInput {
+  latitude: Float!
+  longitude: Float!
+  type: UserLocationType!
+  selectedTheatreId: Int
+}
+
+type UserLocations {
+  id: ID!
+  device: UserLocation
+  search: UserLocation
+}
+
+enum UserLocationType {
+  device
+  search
+}
+
+type UserPayload {
+  user: User
+  viewer: Viewer
+}
+
+enum UserTheatreType {
+  All
+  NearDevice
+  NearLastSearch
+}
+
+type Viewer implements Node & IErrorDetails {
+  id: ID!
+  accountProviders(returnUrl: String): [AccountProvider]
+  attributes(type: AttributeType, groups: [AttributeGroupType], resourceTypes: [ResourceType], after: String, first: Int, before: String, last: Int): AttributeConnection
+  blog: Blog
+  city(stateSlug: String!, citySlug: String!): State
+  disneyRewardsCard(captcha: String!, captchaType: CaptchaType, number: String!, pin: String): DisneyRewardsCard
+  dod: Dod @deprecated(reason: "On Demand decommissioned")
+  flashSale: FlashSale
+  friendByToken(invitationToken: String!): FriendToken
+  friendDiscountEligibility(friendGuid: String!, showtimeId: Int!, theatreId: Int!): FriendDiscountEligibilityType
+  bitpayInvoice(invoiceId: String!): BitPayInvoice
+  giftCard(captcha: String!, captchaType: CaptchaType, number: String!, pin: String): GiftCard
+  homepageTakeover: PayloadHomepageTakeover
+  content: Content
+  location(query: String!, coordinates: CoordinatesInput, after: String, first: Int, before: String, last: Int): LocationConnection
+  loyaltyCard(number: String!): LoyaltyCard
+  machine: Machine
+  market(slug: String!): Market
+  markets(after: String, first: Int, before: String, last: Int): MarketConnection
+  movie(slug: String!): Movie
+  movieList(id: Int!, after: String, first: Int, before: String, last: Int): MovieConnection
+  movies(availability: MovieAvailability, includeAttributes: String, excludeAttributes: String, operation: Operation, after: String, first: Int, before: String, last: Int): MovieConnection
+  navigation(key: String!): Navigation
+  notFoundContent: String
+  notification(key: String): Notification
+  order(token: String): Order
+  orderByOrderNumber(orderNumber: String!, email: String!): Order
+  product(sku: String!): Product
+  promotion(promotionId: Int!): Promotion
+  promotions(theatreId: Int!, theatreBrand: String, theatreMarket: String, premiumCodes: String): Promotions
+  search(query: String!, types: [SearchType], after: String, first: Int, before: String, last: Int, tags: [String]): SearchConnection
+  selectableDates(movieSlug: String): SelectableDates
+  showtime(id: Int!): Showtime
+  showtimePolicies: [ShowtimePolicy]
+  states(after: String, first: Int, before: String, last: Int): StateConnection
+  tags: Tags
+  termsAndConditions(type: TermsAndConditionsType!, subscriptionType: String): TermsAndConditions
+  theatre(slug: String!): Theatre
+  theatres(query: String, coordinates: CoordinatesInput, includeAttributes: String, excludeAttributes: String, brand: String, operation: Operation, after: String, first: Int, before: String, last: Int): TheatreConnection
+  user: User
+  vouchers: Vouchers
+  webProducts: WebProducts
+  zoomRoom(id: Int!): ZoomRoom
+  zoomRooms(after: String, first: Int, before: String, last: Int): ZoomRoomMarketOfferingsConnection
+  zoomRoomsAvailability(date: String!, query: String!): ZoomRoomAvailabilityConnection
+  zoomRoomCalendar(query: String!): ZoomRoomCalendar
+  error: ErrorInfo
+}
+
+type VoucherGift implements IErrorDetails {
+  id: ID!
+  isRedeemed: Boolean
+  isActive: Boolean
+  redemptionSku: String
+  exchangeSku: String
+  error: ErrorInfo
+}
+
+type VoucherProduct {
+  id: ID!
+  cost: Currency
+  durationMonths: Int
+  name: String
+  sku: String
+}
+
+type Vouchers {
+  id: ID!
+  products: [VoucherProduct]
+  gift(token: String!): VoucherGift
+}
+
+type Wallet implements Node & IErrorDetails {
+  id: ID!
+  creditCardCount: Int
+  creditCards: [CreditCard]
+  disneyRewardsCardSummary: WalletDisneyRewardsCardSummary
+  disneyRewardsCards: [DisneyRewardsCard]
+  giftCardSummary: WalletGiftCardSummary
+  giftCard(token: String!): GiftCard
+  giftCards: [GiftCard]
+  loyaltySummary: WalletLoyaltySummary
+  error: ErrorInfo
+}
+
+input WalletCreditCardInput {
+  name: String
+  cardType: String
+  expirationDate: Date
+  lastFour: String
+  merchantCustomer: String
+  merchantToken: String
+  default: Boolean
+}
+
+type WalletDisneyRewardsCardSummary {
+  id: ID!
+  balance: Float
+  count: Int
+  preferredTender: Boolean
+}
+
+type WalletGiftCardSummary {
+  id: ID!
+  balance: Float
+  count: Int
+  preferredTender: Boolean
+}
+
+type WalletLoyaltySummary {
+  id: ID!
+  autoSpend: Boolean
+  balance: Float
+  cardNumber: String
+}
+
+type WalletPayload {
+  wallet: Wallet
+}
+
+type WebProductPass {
+  id: ID!
+  hasLoyaltyEarn: Boolean
+  description: String
+  name: String
+  price: Currency
+  effectiveDate: DateTimeDisplay
+  expirationDate: DateTimeDisplay
+  taxGroupCode: String
+  productBenefitEffectiveCalendarYear: Int
+  productUsageStartDate: DateTimeDisplay
+  productUsageEndDate: DateTimeDisplay
+  sku: String
+}
+
+type WebProducts implements IErrorDetails {
+  id: ID!
+  passes: [WebProductPass]
+  popcornPass: WebProductPass
+  error: ErrorInfo
+}
+
+type ZoomRoom implements Node & IErrorDetails {
+  id: ID!
+  zoomRoomId: Int
+  startDateTimeLocal: DateTimeDisplay
+  endDateTimeCentral: DateTimeDisplay
+  startDateTimeCentral: DateTimeDisplay
+  isBooked: Boolean
+  maximumGuestAttendance: Int
+  price: Currency
+  sku: String
+  theatre: Theatre
+  timezoneAbbreviation: String
+  error: ErrorInfo
+}
+
+type ZoomRoomAvailability implements Node & IErrorDetails {
+  id: ID!
+  startDateTimeCentral: DateTimeDisplay
+  endDateTimeCentral: DateTimeDisplay
+  totalPrice: Currency
+  zoomRooms: [ZoomRoom]
+  error: ErrorInfo
+}
+
+type ZoomRoomAvailabilityConnection implements IErrorDetails {
+  id: ID!
+  theatreIds: [Int]
+  pageInfo: PageInfo!
+  edges: [ZoomRoomAvailabilityEdge]
+  count: Int
+  error: ErrorInfo
+}
+
+type ZoomRoomAvailabilityEdge {
+  id: ID!
+  node: ZoomRoomAvailability
+  cursor: String!
+}
+
+type ZoomRoomCalendar implements IErrorDetails {
+  id: ID!
+  availableDates: [String]
+  error: ErrorInfo
+}
+
+input ZoomRoomContactInput {
+  name: String
+  email: String
+  phoneNumber: String
+  organization: String
+}
+
+type ZoomRoomMarketOfferings implements Node & IErrorDetails {
+  id: ID!
+  name: String
+  maximumGuestAttendance: Int
+  theatres: [Theatre]
+  error: ErrorInfo
+}
+
+type ZoomRoomMarketOfferingsConnection implements IErrorDetails {
+  id: ID!
+  pageInfo: PageInfo!
+  edges: [ZoomRoomMarketOfferingsEdge]
+  count: Int
+  error: ErrorInfo
+}
+
+type ZoomRoomMarketOfferingsEdge {
+  id: ID!
+  node: ZoomRoomMarketOfferings
+  cursor: String!
+}
