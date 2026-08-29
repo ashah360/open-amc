@@ -41,7 +41,7 @@ describe("PlaywrightBrowserRuntime.acquire", () => {
         endpointURL: "http://127.0.0.1:9222",
         connectOptions: { slowMo: 5 },
       },
-      { loadModule: async () => module },
+      { loadModule: async () => module, cdpPreflight: async () => undefined },
     );
 
     const acquired = await runtime.acquire();
@@ -103,7 +103,7 @@ describe("PlaywrightBrowserRuntime.acquire", () => {
     const module = fakePlaywrightModule({ connect: browser });
     const runtime = new PlaywrightBrowserRuntime(
       { kind: "cdp", endpointURL: "http://127.0.0.1:9222" },
-      { loadModule: async () => module },
+      { loadModule: async () => module, cdpPreflight: async () => undefined },
     );
 
     await expect(runtime.acquire()).rejects.toThrow(/cdp context boom/);

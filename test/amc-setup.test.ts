@@ -3,6 +3,7 @@ import { runAmcCli, BuiltInBrowserRepairOptions } from "../src/cli";
 import type { AmcClient } from "../src/client";
 import type { AmcBrowserRefresher } from "../src/client/browser-refresh";
 import type { AmcSession } from "../src/client/session";
+import { PlaywrightConnectionError } from "../src/capabilities/browser/playwright/runtime";
 
 const THEATER_URL =
   "https://www.amctheatres.com/movie-theatres/chicago/amc-river-east-21/showtimes";
@@ -196,6 +197,28 @@ describe("amc setup", () => {
     expect(JSON.parse(output[0]!).error.code).toBe(
       "AMC_SESSION_REPAIR_REQUIRED",
     );
+  });
+
+  it("surfaces a dead CDP endpoint as one stable nonzero JSON error without leaking the endpoint", async () => {
+    const repair = vi.fn(async () => {
+      throw new PlaywrightConnectionError("unreachable");
+    });
+    const { code, output } = await run(
+      [
+        "setup",
+        "--theater-url",
+        THEATER_URL,
+        "--cdp-url",
+        "http://127.0.0.1:39861",
+        "--json",
+      ],
+      stubClient({ repair }),
+    );
+    expect(code).toBe(1);
+    expect(output).toHaveLength(1);
+    const { error } = JSON.parse(output[0]!);
+    expect(error.code).toBe("AMC_PLAYWRIGHT_CONNECTION_FAILED");
+    expect(output[0]).not.toContain("39861");
   });
 
   it("doctor and showtimes never build a browser (setup is the only launcher here)", async () => {

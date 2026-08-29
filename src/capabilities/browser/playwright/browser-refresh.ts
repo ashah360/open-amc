@@ -15,6 +15,7 @@ import {
 import {
   BrowserOperationTimeoutError,
   PlaywrightBrowserRuntime,
+  PlaywrightConnectionError,
   PlaywrightPage,
   PlaywrightSetupError,
   PlaywrightWorkspace,
@@ -241,9 +242,11 @@ export class PlaywrightAmcBrowserRefresher implements AmcBrowserRefresher {
     try {
       return await this.runtime.open();
     } catch (error) {
-      // A missing dependency/browser is a typed setup error the caller can act
-      // on; anything else collapses to an opaque transport failure.
+      // A missing dependency/browser (setup) or a dead/hung CDP endpoint
+      // (connection) is a typed, actionable error the caller must see as-is;
+      // anything else collapses to an opaque transport failure.
       if (error instanceof PlaywrightSetupError) throw error;
+      if (error instanceof PlaywrightConnectionError) throw error;
       throw new BrowserRefreshUnavailableError("transport");
     }
   }

@@ -14,7 +14,9 @@ export {
   PlaywrightBrowserRuntime,
   PlaywrightWorkspace,
   PlaywrightSetupError,
+  PlaywrightConnectionError,
   BrowserOperationTimeoutError,
+  preflightCdpEndpoint,
   runWithBrowserBudget,
 } from "./runtime";
 export type {

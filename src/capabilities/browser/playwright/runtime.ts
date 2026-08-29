@@ -120,6 +120,162 @@ export class BrowserOperationTimeoutError extends Error {
 }
 
 /**
+ * Raised when a CDP endpoint cannot be connected to: unreachable/refused,
+ * timed out, or returned an invalid DevTools response. Deliberately carries
+ * only the non-secret reason — never the endpoint URL or response bytes — and
+ * exists so a dead `--cdp-url` fails fast with a stable nonzero JSON error
+ * instead of leaving an unresolved, unref'd promise that lets Node exit 0
+ * silently.
+ */
+export class PlaywrightConnectionError extends Error {
+  readonly code = "AMC_PLAYWRIGHT_CONNECTION_FAILED";
+
+  constructor(readonly reason: "unreachable" | "timeout" | "invalid-response") {
+    super(
+      reason === "timeout"
+        ? "AMC Playwright CDP endpoint did not respond in time; verify the Chrome behind --cdp-url is running and reachable"
+        : reason === "unreachable"
+          ? "AMC Playwright CDP endpoint is unreachable; verify the Chrome behind --cdp-url is running and reachable"
+          : "AMC Playwright CDP endpoint returned an invalid DevTools response; verify --cdp-url points at Chrome's remote debugging port",
+    );
+  }
+}
+
+/** Bounded preflight budget for GET <endpoint>/json/version. */
+const CDP_PREFLIGHT_TIMEOUT_MS = 5_000;
+/** Bound on the /json/version body we are willing to read. */
+const CDP_PREFLIGHT_MAX_BYTES = 256 * 1024;
+/** Hard wall for connectOverCDP itself (post-preflight hangs). */
+const CDP_CONNECT_TIMEOUT_MS = 30_000;
+
+/**
+ * Bounded reachability/protocol preflight for a CDP endpoint, run BEFORE
+ * `connectOverCDP`: validates the http(s) URL shape, GETs its
+ * `/json/version` (endpoint paths are respected), and requires HTTP 200 JSON
+ * with a nonempty `webSocketDebuggerUrl` (or an equivalent valid CDP version
+ * shape). Redirects are not followed and count as invalid. The timeout timer
+ * is REF'D so the process cannot silently exit 0 mid-check. Errors never echo
+ * the endpoint or response.
+ */
+export async function preflightCdpEndpoint(
+  endpointURL: string,
+  timeoutMs = CDP_PREFLIGHT_TIMEOUT_MS,
+): Promise<void> {
+  let base: URL;
+  try {
+    base = new URL(endpointURL);
+  } catch {
+    throw new PlaywrightConnectionError("invalid-response");
+  }
+  if (base.protocol !== "http:" && base.protocol !== "https:") {
+    throw new PlaywrightConnectionError("invalid-response");
+  }
+  const versionUrl = new URL(base.toString());
+  versionUrl.pathname = `${base.pathname.replace(/\/+$/, "")}/json/version`;
+  versionUrl.search = "";
+  versionUrl.hash = "";
+
+  const controller = new AbortController();
+  // Deliberately ref'd: this timer keeps the event loop alive for the check.
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    let response: Response;
+    try {
+      response = await fetch(versionUrl, {
+        redirect: "manual",
+        signal: controller.signal,
+      });
+    } catch {
+      throw new PlaywrightConnectionError(
+        controller.signal.aborted ? "timeout" : "unreachable",
+      );
+    }
+    // Any non-200 (including 3xx under redirect: "manual") is invalid; we never
+    // follow redirects off the configured endpoint.
+    if (response.status !== 200) {
+      throw new PlaywrightConnectionError("invalid-response");
+    }
+    let text: string;
+    try {
+      text = await response.text();
+    } catch {
+      throw new PlaywrightConnectionError(
+        controller.signal.aborted ? "timeout" : "invalid-response",
+      );
+    }
+    if (Buffer.byteLength(text, "utf8") > CDP_PREFLIGHT_MAX_BYTES) {
+      throw new PlaywrightConnectionError("invalid-response");
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new PlaywrightConnectionError("invalid-response");
+    }
+    const record =
+      typeof parsed === "object" && parsed !== null
+        ? (parsed as Record<string, unknown>)
+        : {};
+    const webSocketDebuggerUrl = record.webSocketDebuggerUrl;
+    const validShape =
+      (typeof webSocketDebuggerUrl === "string" &&
+        webSocketDebuggerUrl.length > 0) ||
+      (typeof record.Browser === "string" &&
+        typeof record["Protocol-Version"] === "string");
+    if (!validShape) {
+      throw new PlaywrightConnectionError("invalid-response");
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * `connectOverCDP` with a REF'D hard timeout: an endpoint can pass preflight
+ * and then hang the connect, and playwright's pending promise alone holds no
+ * ref'd handle, which previously let Node exit 0 with no output. A late
+ * post-timeout connection is closed so nothing leaks; success clears the
+ * timer.
+ */
+async function connectOverCdpWithBudget(
+  module: PlaywrightModule,
+  endpointURL: string,
+  connectOptions?: Record<string, unknown>,
+  timeoutMs = CDP_CONNECT_TIMEOUT_MS,
+): Promise<PlaywrightBrowser> {
+  let timer: NodeJS.Timeout | undefined;
+  let timedOut = false;
+  const timeout = new Promise<never>((_, reject) => {
+    // Deliberately ref'd: keeps the process alive until connect settles or the
+    // budget elapses.
+    timer = setTimeout(() => {
+      timedOut = true;
+      reject(new PlaywrightConnectionError("timeout"));
+    }, timeoutMs);
+  });
+  const connecting = module.chromium.connectOverCDP(
+    endpointURL,
+    connectOptions,
+  );
+  // If the library connects after the budget already rejected, close the late
+  // browser handle so nothing leaks; swallow its own failure.
+  connecting.then(
+    (browser) => {
+      if (timedOut) void browser.close().catch(() => undefined);
+    },
+    () => undefined,
+  );
+  try {
+    return await Promise.race([connecting, timeout]);
+  } catch (error) {
+    if (error instanceof PlaywrightConnectionError) throw error;
+    throw new PlaywrightConnectionError("unreachable");
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
  * Runs `work` under a timeout budget and an optional AbortSignal. On timeout or
  * abort it rejects with a typed BrowserOperationTimeoutError; the caller is
  * responsible for disposing any acquired browser resources in its own `finally`
@@ -191,6 +347,13 @@ export interface PlaywrightBrowserRuntimeOptions {
    * lazily; a missing module surfaces as a single typed PlaywrightSetupError.
    */
   loadModule?: () => Promise<PlaywrightModule>;
+  /**
+   * CDP endpoint preflight seam (tests). Defaults to the real bounded
+   * {@link preflightCdpEndpoint}; only used for `kind: "cdp"` connections.
+   */
+  cdpPreflight?: (endpointURL: string) => Promise<void>;
+  /** Hard budget for connectOverCDP itself (tests may shorten it). */
+  cdpConnectTimeoutMs?: number;
 }
 
 async function defaultLoadModule(): Promise<PlaywrightModule> {
@@ -214,12 +377,17 @@ function looksLikeMissingBrowser(error: unknown): boolean {
 
 export class PlaywrightBrowserRuntime {
   private readonly loadModule: () => Promise<PlaywrightModule>;
+  private readonly cdpPreflight: (endpointURL: string) => Promise<void>;
+  private readonly cdpConnectTimeoutMs: number;
 
   constructor(
     private readonly connection: PlaywrightConnection,
     options: PlaywrightBrowserRuntimeOptions = {},
   ) {
     this.loadModule = options.loadModule ?? defaultLoadModule;
+    this.cdpPreflight = options.cdpPreflight ?? preflightCdpEndpoint;
+    this.cdpConnectTimeoutMs =
+      options.cdpConnectTimeoutMs ?? CDP_CONNECT_TIMEOUT_MS;
   }
 
   /** Acquire a context, launching or connecting only when required. */
@@ -254,10 +422,15 @@ export class PlaywrightBrowserRuntime {
         };
       }
       case "cdp": {
+        // Fail fast and typed on a dead/stale endpoint BEFORE loading
+        // playwright or attempting connectOverCDP.
+        await this.cdpPreflight(this.connection.endpointURL);
         const module = await this.loadPlaywright();
-        const browser = await module.chromium.connectOverCDP(
+        const browser = await connectOverCdpWithBudget(
+          module,
           this.connection.endpointURL,
           this.connection.connectOptions,
+          this.cdpConnectTimeoutMs,
         );
         // The Chrome behind a CDP endpoint was started by someone else. We own
         // only the local Playwright connection: create/own a fresh context, and
