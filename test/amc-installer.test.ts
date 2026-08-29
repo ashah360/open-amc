@@ -175,8 +175,14 @@ describe("install.sh", () => {
     expect(second.status).toBe(0);
     const git = logOf(sandbox, "git");
     expect(git.match(/clone /g)).toHaveLength(1);
-    expect(git).toContain(`-C ${installDir} fetch --force --tags origin`);
-    expect(git).toContain(`-C ${installDir} checkout --force --detach v0.1.2`);
+    expect(git).toContain(
+      `-C ${installDir} fetch --force --tags origin v0.1.2`,
+    );
+    // The exact fetched ref is checked out, so a stale local branch with the
+    // same name can never win over the fresh fetch.
+    expect(git).toContain(
+      `-C ${installDir} checkout --force --detach FETCH_HEAD`,
+    );
   });
 
   it("supports a testable ref/repository override without changing the default pin", () => {

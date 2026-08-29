@@ -73,8 +73,10 @@ if [ -d "$OPEN_AMC_HOME/.git" ]; then
     exit 1
   fi
   log "Updating existing checkout at $OPEN_AMC_HOME to $OPEN_AMC_REF"
-  git -C "$OPEN_AMC_HOME" fetch --force --tags origin
-  git -C "$OPEN_AMC_HOME" checkout --force --detach "$OPEN_AMC_REF"
+  # Check out the exact FETCHED ref: a stale local branch of the same name
+  # (from the original clone) must never win over the freshly fetched one.
+  git -C "$OPEN_AMC_HOME" fetch --force --tags origin "$OPEN_AMC_REF"
+  git -C "$OPEN_AMC_HOME" checkout --force --detach FETCH_HEAD
 elif [ -e "$OPEN_AMC_HOME" ] && [ -n "$(ls -A "$OPEN_AMC_HOME" 2>/dev/null)" ]; then
   echo "error: refusing to install into nonempty non-open-amc directory: $OPEN_AMC_HOME" >&2
   exit 1
