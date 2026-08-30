@@ -24,7 +24,7 @@ never zero-config).
 **A. Paste the repo URL with a prompt.** Your agent clones, installs, and reads
 the root `AGENTS.md`/`SKILL.md`:
 
-> Install https://github.com/ashah360/open-amc.git (tag v0.1.4, run
+> Install https://github.com/ashah360/open-amc.git (tag v0.1.5, run
 > `bash install.sh --agent auto`), then run
 > `amc setup --theater-url "<official AMC theater URL>" --json`. After setup,
 > find showtimes and hold my seats, then give me the checkout URL privately.
@@ -32,17 +32,17 @@ the root `AGENTS.md`/`SKILL.md`:
 **B. One installer (Hermes and OpenClaw).** Auditable clone-then-run:
 
 ```bash
-git clone --branch v0.1.4 --depth 1 https://github.com/ashah360/open-amc.git
+git clone --branch v0.1.5 --depth 1 https://github.com/ashah360/open-amc.git
 bash open-amc/install.sh --agent hermes   # or: --agent openclaw | auto
 ```
 
 or, as a convenience one-liner:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ashah360/open-amc/v0.1.4/install.sh | bash -s -- --agent hermes
+curl -fsSL https://raw.githubusercontent.com/ashah360/open-amc/v0.1.5/install.sh | bash -s -- --agent hermes
 ```
 
-It pins v0.1.4 into `~/.open-amc/app` (override `OPEN_AMC_HOME`), installs the
+It pins v0.1.5 into `~/.open-amc/app` (override `OPEN_AMC_HOME`), installs the
 exact lock-pinned `playwright-core` into that private checkout so `amc setup` /
 `amc auth repair --listing-url ...` work out of the box (no browser download; an
 installed Chrome/Chromium remains the prerequisite; nothing global), links
@@ -56,7 +56,7 @@ safely updates the same install.
 Installing the skill manually later:
 
 ```bash
-hermes skills install https://raw.githubusercontent.com/ashah360/open-amc/v0.1.4/SKILL.md --yes   # then start a new Hermes session
+hermes skills install https://raw.githubusercontent.com/ashah360/open-amc/v0.1.5/SKILL.md --yes   # then start a new Hermes session
 openclaw skills install <path-to-open-amc-checkout> --global --as open-amc
 ```
 

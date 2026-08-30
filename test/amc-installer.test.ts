@@ -64,7 +64,7 @@ function makeSandbox(
       `if [ "$1" = "clone" ]; then`,
       `  dest="\${@: -1}"`,
       `  mkdir -p "$dest/bin" "$dest/.git"`,
-      `  printf '%s' '{"name":"@ashah360/open-amc","version":"0.1.4"}' > "$dest/package.json"`,
+      `  printf '%s' '{"name":"@ashah360/open-amc","version":"0.1.5"}' > "$dest/package.json"`,
       `  printf '%s' '{"name":"@ashah360/open-amc","lockfileVersion":3,"packages":{"node_modules/playwright-core":{"version":"1.62.1"}}}' > "$dest/package-lock.json"`,
       `  printf '%s\\n' '---' 'name: open-amc' '---' > "$dest/SKILL.md"`,
       `  {`,
@@ -185,7 +185,7 @@ describe("install.sh", () => {
     // Pinned clone of the overridable repository at the production tag.
     const git = logOf(sandbox, "git");
     expect(git).toContain(
-      `clone --branch v0.1.4 --depth 1 https://git.example.test/open-amc.git ${installDir}`,
+      `clone --branch v0.1.5 --depth 1 https://git.example.test/open-amc.git ${installDir}`,
     );
     // Dependencies installed inside the checkout.
     expect(logOf(sandbox, "npm")).toContain("npm install --no-audit --no-fund");
@@ -209,7 +209,7 @@ describe("install.sh", () => {
     // Hermes got the pinned raw root SKILL URL, noninteractive with --yes.
     // This host's Hermes does NOT advertise --now, so it is omitted.
     expect(logOf(sandbox, "hermes")).toContain(
-      "skills install https://raw.githubusercontent.com/ashah360/open-amc/v0.1.4/SKILL.md --yes",
+      "skills install https://raw.githubusercontent.com/ashah360/open-amc/v0.1.5/SKILL.md --yes",
     );
     expect(logOf(sandbox, "hermes")).not.toContain("--now");
     // OpenClaw got the local checkout root, global, with a stable name.
@@ -234,7 +234,7 @@ describe("install.sh", () => {
     const git = logOf(sandbox, "git");
     expect(git.match(/clone /g)).toHaveLength(1);
     expect(git).toContain(
-      `-C ${installDir} fetch --force --tags origin v0.1.4`,
+      `-C ${installDir} fetch --force --tags origin v0.1.5`,
     );
     // The exact fetched ref is checked out, so a stale local branch with the
     // same name can never win over the fresh fetch.
@@ -292,7 +292,7 @@ describe("install.sh", () => {
     const { status, output } = runInstaller(sandbox, ["--agent", "auto"]);
     expect(status).toBe(0);
     expect(output).toContain(
-      "hermes skills install https://raw.githubusercontent.com/ashah360/open-amc/v0.1.4/SKILL.md --yes",
+      "hermes skills install https://raw.githubusercontent.com/ashah360/open-amc/v0.1.5/SKILL.md --yes",
     );
     expect(output).toContain("--global --as open-amc");
     expect(output).not.toContain("--now");

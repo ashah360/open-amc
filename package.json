@@ -1,6 +1,6 @@
 {
   "name": "@ashah360/open-amc",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Typed, single-operation AMC showtime, seat inventory, cart, checkout, and refund client with a thin CLI. Unofficial and not affiliated with or endorsed by AMC.",
   "license": "MIT",
   "type": "commonjs",
