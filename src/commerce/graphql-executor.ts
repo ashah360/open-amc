@@ -159,7 +159,11 @@ export class ScopedAmcGraphqlClient {
       // (no complete HTTP response) is never retried and stays ambiguous.
       let current = context;
       for (let dispatch = 0; ; dispatch++) {
-        let response: { status: number; bodyText: string };
+        let response: {
+          status: number;
+          bodyText: string;
+          headers: Record<string, string>;
+        };
         try {
           response = await this.dispatchRaw(current, envelope, true);
         } catch (error) {
@@ -217,7 +221,11 @@ export class ScopedAmcGraphqlClient {
    * transport throw (reconcile-only, no retry); a 200 parses to the result.
    */
   private classifyWriteResponse(
-    response: { status: number; bodyText: string },
+    response: {
+      status: number;
+      bodyText: string;
+      headers?: Record<string, string>;
+    },
     operationName: string,
   ):
     | { kind: "ok"; value: unknown }
@@ -251,7 +259,11 @@ export class ScopedAmcGraphqlClient {
     context: AmcSessionContext,
     envelope: GraphqlEnvelope<unknown> | GraphqlEnvelopeWithoutVariables,
     write: boolean,
-  ): Promise<{ status: number; bodyText: string }> {
+  ): Promise<{
+    status: number;
+    bodyText: string;
+    headers: Record<string, string>;
+  }> {
     const cookie = cookieHeaderFor(context.session, GRAPHQL_URL);
     if (!cookie) throw new AmcGraphqlContractError(envelope.operationName);
     const response = await this.transport.request({
@@ -274,10 +286,19 @@ export class ScopedAmcGraphqlClient {
   }
 
   private parseGraphResponse(
-    response: { status: number; bodyText: string },
+    response: {
+      status: number;
+      bodyText: string;
+      headers?: Record<string, string>;
+    },
     operationName: string,
   ): unknown {
-    classifyGraphResponse(response.status, response.bodyText, operationName);
+    classifyGraphResponse(
+      response.status,
+      response.headers ?? {},
+      response.bodyText,
+      operationName,
+    );
     try {
       return JSON.parse(response.bodyText);
     } catch {
@@ -452,15 +473,11 @@ export class AmcGraphqlPaymentProvider
 
 function classifyGraphResponse(
   status: number,
+  headers: Record<string, string>,
   body: string,
   operation: string,
 ): void {
-  if (
-    (status === 403 || status === 429) &&
-    /(queue-it|queueit|waiting room|cf-chl|challenge-platform|just a moment)/i.test(
-      body,
-    )
-  ) {
+  if (isAntiBotChallenge(status, headers, body)) {
     throw new AmcChallengeError("AMC GraphQL returned an anti-bot challenge");
   }
   if (status === 401)
@@ -471,4 +488,53 @@ function classifyGraphResponse(
       status,
     );
   }
+}
+
+/** Older Queue-it / Cloudflare interstitial body markers (header-independent). */
+const LEGACY_CHALLENGE_BODY =
+  /(queue-it|queueit|waiting room|cf-chl|challenge-platform|just a moment)/i;
+/**
+ * Bounded Cloudflare CAPTCHA / managed-challenge body markers. Only consulted
+ * together with a Cloudflare-fronted HTML response, so ordinary origin bodies
+ * that merely contain one of these words are never misclassified.
+ */
+const CLOUDFLARE_CHALLENGE_BODY =
+  /(captcha|hcaptcha|recaptcha|turnstile|attention required|checking your browser|verify you are (?:a )?human|are you a robot|needs to review the security|performance (?:&|&amp;) security by cloudflare)/i;
+
+function headerValue(
+  headers: Record<string, string>,
+  name: string,
+): string | undefined {
+  const target = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === target) return value;
+  }
+  return undefined;
+}
+
+/**
+ * A positively identified anti-bot challenge (not a generic origin rejection).
+ * True when the older body markers match, OR when a 403/429 HTML response is
+ * Cloudflare-fronted (server=cloudflare or a cf-ray/cf-mitigated header) AND
+ * carries a bounded Cloudflare CAPTCHA/challenge body marker. A bare
+ * `server: cloudflare` is never sufficient on its own.
+ */
+function isAntiBotChallenge(
+  status: number,
+  headers: Record<string, string>,
+  body: string,
+): boolean {
+  if (status !== 403 && status !== 429) return false;
+  if (LEGACY_CHALLENGE_BODY.test(body)) return true;
+  const contentType = (
+    headerValue(headers, "content-type") ?? ""
+  ).toLowerCase();
+  if (!contentType.includes("text/html")) return false;
+  const server = (headerValue(headers, "server") ?? "").toLowerCase();
+  const cloudflareFronted =
+    server.includes("cloudflare") ||
+    headerValue(headers, "cf-ray") !== undefined ||
+    headerValue(headers, "cf-mitigated") !== undefined;
+  if (!cloudflareFronted) return false;
+  return CLOUDFLARE_CHALLENGE_BODY.test(body);
 }

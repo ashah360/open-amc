@@ -63,6 +63,104 @@ describe("write recovery on a complete anti-bot challenge", () => {
     // admission stayed on the direct Queue-it GET path.
   });
 
+  it("classifies the live Cloudflare CAPTCHA HTML 403 as a challenge: re-admits once and redispatches to success (2 mutations)", async () => {
+    const harness = await harnessFor([
+      preflightCanaryOk(),
+      cloudflareCaptcha403(),
+      ...directAdmissionOk(),
+      canaryOk(),
+      cartCreateOk(ORDER_TOKEN),
+    ]);
+    const tokens: string[] = [];
+    const cart = await harness.executor.createCart(intent(), (token) => {
+      tokens.push(token);
+      return Promise.resolve();
+    });
+    expect(cart.orderToken).toBe(ORDER_TOKEN);
+    expect(cartMutations(harness)).toBe(2);
+    expect(tokens).toEqual([ORDER_TOKEN]);
+  });
+
+  it("surfaces a persistent Cloudflare CAPTCHA 403 as AMC_WRITE_CHALLENGED after exactly two mutations", async () => {
+    const harness = await harnessFor([
+      preflightCanaryOk(),
+      cloudflareCaptcha403(),
+      ...directAdmissionOk(),
+      canaryOk(),
+      cloudflareCaptcha403(),
+    ]);
+    const error = await harness.service
+      .createCart(intent())
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WriteChallengedError);
+    expect(cartMutations(harness)).toBe(2);
+  });
+
+  it("returns AMC_SESSION_REPAIR_REQUIRED with one mutation when re-admission after a Cloudflare CAPTCHA 403 needs a browser", async () => {
+    const harness = await harnessFor([
+      preflightCanaryOk(),
+      cloudflareCaptcha403(),
+      html(403, "<title>Just a moment... cloudflare</title>"),
+    ]);
+    const error = await harness.service
+      .createCart(intent())
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AmcSessionRepairRequiredError);
+    expect(cartMutations(harness)).toBe(1);
+  });
+
+  it("keeps a generic HTML 403 with only the word captcha (no Cloudflare corroboration) as definite AMC_HTTP, no refresh", async () => {
+    const harness = await harnessFor([
+      preflightCanaryOk(),
+      html(
+        403,
+        "<html><body>please solve the captcha to continue</body></html>",
+      ),
+    ]);
+    const error = await harness.executor
+      .createCart(intent())
+      .catch((e: unknown) => e);
+    expect((error as { code?: string }).code).toBe("AMC_HTTP");
+    expect(error).not.toBeInstanceOf(AmbiguousWriteError);
+    expect(cartMutations(harness)).toBe(1);
+  });
+
+  it("keeps a Cloudflare-fronted ordinary origin 403 (headers only, no challenge body) as definite AMC_HTTP", async () => {
+    const harness = await harnessFor([
+      preflightCanaryOk(),
+      withHeaders(403, "<html><body>Origin request forbidden.</body></html>", {
+        "content-type": "text/html; charset=utf-8",
+        server: "cloudflare",
+        "cf-ray": "8f0000000000abcd-LAX",
+      }),
+    ]);
+    const error = await harness.executor
+      .createCart(intent())
+      .catch((e: unknown) => e);
+    expect((error as { code?: string }).code).toBe("AMC_HTTP");
+    expect(cartMutations(harness)).toBe(1);
+  });
+
+  it("keeps a Cloudflare-fronted JSON 403 (non-HTML) as definite AMC_HTTP", async () => {
+    const harness = await harnessFor([
+      preflightCanaryOk(),
+      withHeaders(
+        403,
+        '{"errors":[{"message":"forbidden","extensions":{"code":"FORBIDDEN"}}]}',
+        {
+          "content-type": "application/json; charset=utf-8",
+          server: "cloudflare",
+          "cf-ray": "8f0000000000abcd-LAX",
+        },
+      ),
+    ]);
+    const error = await harness.executor
+      .createCart(intent())
+      .catch((e: unknown) => e);
+    expect((error as { code?: string }).code).toBe("AMC_HTTP");
+    expect(cartMutations(harness)).toBe(1);
+  });
+
   it("returns typed AMC_SESSION_REPAIR_REQUIRED with zero second mutation when direct re-admission needs a browser", async () => {
     const harness = await harnessFor([
       preflightCanaryOk(),
@@ -403,6 +501,41 @@ function html(status: number, body: string): ResponseOutput {
     setCookieNames: [],
     setCookies: [],
   };
+}
+
+function withHeaders(
+  status: number,
+  body: string,
+  headers: Record<string, string>,
+): ResponseOutput {
+  return {
+    status,
+    headers,
+    bodyText: body,
+    timingMs: 1,
+    transport: "scripted",
+    setCookieNames: [],
+    setCookies: [],
+  };
+}
+
+/**
+ * The exact SAFE shape observed live on an Empire CartCreateOrder 403: HTML,
+ * `server: cloudflare`, a `cf-ray` header, no `cf-mitigated`, a Cloudflare
+ * CAPTCHA body that matches NONE of the older challenge markers.
+ */
+function cloudflareCaptcha403(): ResponseOutput {
+  return withHeaders(
+    403,
+    "<html><head><title>Attention Required! | Cloudflare</title></head>" +
+      "<body>Please complete the security check to access: captcha required. " +
+      "Cloudflare Ray ID below. Performance &amp; security by Cloudflare.</body></html>",
+    {
+      "content-type": "text/html; charset=utf-8",
+      server: "cloudflare",
+      "cf-ray": "8f0000000000abcd-LAX",
+    },
+  );
 }
 
 function redirect(location: string, setCookies: string[] = []): ResponseOutput {
