@@ -33,6 +33,28 @@ export interface CartSnapshot {
   status: "OPEN" | "FULFILLED" | "EXPIRED";
 }
 
+/**
+ * The provider order's current lifecycle, decided from ONE fresh projection.
+ * The provider order is the sole source of truth; the commerce layer keeps no
+ * lifecycle state of its own.
+ *
+ * - `open`: Pending, nothing paid, unexpired — an open cart (its snapshot is
+ *   included when the caller supplied the intent to validate seats/SKU).
+ * - `purchased`: Fulfilled/Confirmed — the provider's confirmation and charged
+ *   total win.
+ * - `closed-unpaid`: Expired/Cancelled with nothing paid and no groups — the
+ *   hold is gone and nothing was charged; a new cart for the seats is allowed.
+ * - `ambiguous-paid`: money has moved but the order is not yet Fulfilled — do
+ *   not write or release; keep any uncertainty marker.
+ * - `drift`: an unexpected/partial terminal shape — keep the marker and stop.
+ */
+export type OrderLifecycle =
+  | { kind: "open"; cart?: CartSnapshot }
+  | { kind: "purchased"; purchase: PurchaseResult }
+  | { kind: "closed-unpaid" }
+  | { kind: "ambiguous-paid" }
+  | { kind: "drift" };
+
 export interface RefundLineSnapshot {
   lineNumber: string;
   label: string;

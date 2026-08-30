@@ -3,6 +3,7 @@ import {
   CartCreateIntent,
   CartSnapshot,
   Money,
+  OrderLifecycle,
   PurchaseNotCompletedError,
   PurchaseResult,
   RefundLineSnapshot,
@@ -99,6 +100,42 @@ export class AmcGraphqlOrderProjectionProvider implements AmcCommerceProjectionP
     // OrderCreate does not accept a client token. A lost response cannot be
     // mapped to the generated provider token without inventing identity.
     return Promise.resolve(null);
+  }
+
+  /**
+   * Decide an order's current lifecycle from ONE fresh projection. This is the
+   * single provider-authoritative read the commerce layer uses to answer "what
+   * is this order now?"; it never infers from local state or seat availability.
+   */
+  async projectLifecycle(
+    orderToken: string,
+    opts: { intent?: CartCreateIntent; now: Date },
+  ): Promise<OrderLifecycle> {
+    const order = await this.readOrder(orderToken);
+    const status = order.status;
+    const paidCents = cents(order.paid, "lifecycle.paid");
+    if (status === "Fulfilled" || status === "Confirmed") {
+      const purchase = purchaseResult(order, orderToken);
+      if (!purchase) throw new AmcOrderProjectionError("lifecycle.purchased");
+      return { kind: "purchased", purchase };
+    }
+    if (status === "Pending") {
+      if (paidCents > 0) return { kind: "ambiguous-paid" };
+      const expiresAt = iso(order.expirationDateUtc, "lifecycle.expiration");
+      if (Date.parse(expiresAt) <= opts.now.getTime()) return { kind: "drift" };
+      if (!opts.intent) return { kind: "open" };
+      return {
+        kind: "open",
+        cart: cartSnapshot(order, orderToken, opts.intent),
+      };
+    }
+    if (status === "Expired" || status === "Cancelled") {
+      const groups = array(order.groups, "lifecycle.groups");
+      if (paidCents === 0 && groups.length === 0)
+        return { kind: "closed-unpaid" };
+      return { kind: "drift" };
+    }
+    throw new AmcOrderProjectionError("lifecycle.status");
   }
 
   async projectRefundOrder(input: {
