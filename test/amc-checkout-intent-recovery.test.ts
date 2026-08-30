@@ -476,7 +476,8 @@ class FakeRiskHttp {
     if (input.url.includes("/cs/config?")) {
       return Promise.resolve({
         status: 200,
-        bodyText: '{"collection":{"collect":true,"feature_flags":{}}}',
+        bodyText:
+          '{"collection":{"collect":true,"feature_flags":{"app":true,"battery":true,"browser":true,"exp":true,"page":true,"ui":true,"passLoc":true}}}',
       });
     }
     if (input.url.includes("/session/")) {

@@ -214,12 +214,14 @@ export class AmcKountSessionProvider implements KountSessionProvider {
           Referer: AMC_REFERER,
         },
       });
-      if (
-        configResponse.status !== 200 ||
-        !validCollectingConfig(configResponse.bodyText)
-      ) {
-        return failure;
-      }
+      if (configResponse.status !== 200) return failure;
+      const config = parseCollectorConfig(configResponse.bodyText);
+      if (!config.valid) return failure;
+      // collect=false is a VALID Kount answer meaning "no collection run
+      // needed" (the official 2.2.3 client yields {run:false} and stops):
+      // initialization is complete with no cookie store/generate step.
+      if (!config.collect)
+        return { initialized: true, sessionId: input.sessionId };
 
       const firstPartyCookie =
         await this.options.firstPartyCookie.getCookie(input);
@@ -301,17 +303,46 @@ function query(values: Record<string, string>): string {
   return new URLSearchParams(values).toString();
 }
 
-function validCollectingConfig(bodyText: string): boolean {
+const COLLECT_FEATURE_FLAGS = [
+  "app",
+  "battery",
+  "browser",
+  "exp",
+  "page",
+  "ui",
+  "passLoc",
+] as const;
+
+/**
+ * Mirror of the official Kount Web Client 2.2.3 config translation: collection
+ * and feature_flags must be present and collect must be boolean; the named
+ * feature flags must be booleans ONLY when collect=true. collect=false is a
+ * valid "no collection run" answer. Anything else fails closed.
+ */
+function parseCollectorConfig(
+  bodyText: string,
+): { valid: true; collect: boolean } | { valid: false } {
   try {
     const value: unknown = JSON.parse(bodyText);
-    return (
-      isRecord(value) &&
-      isRecord(value.collection) &&
-      value.collection.collect === true &&
-      isRecord(value.collection.feature_flags)
-    );
+    if (
+      !isRecord(value) ||
+      !isRecord(value.collection) ||
+      value.collection.feature_flags === undefined ||
+      typeof value.collection.collect !== "boolean"
+    ) {
+      return { valid: false };
+    }
+    if (!value.collection.collect) return { valid: true, collect: false };
+    const flags = value.collection.feature_flags;
+    if (
+      !isRecord(flags) ||
+      COLLECT_FEATURE_FLAGS.some((name) => typeof flags[name] !== "boolean")
+    ) {
+      return { valid: false };
+    }
+    return { valid: true, collect: true };
   } catch {
-    return false;
+    return { valid: false };
   }
 }
 

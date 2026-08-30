@@ -19,6 +19,22 @@ const ORDER_TOKEN = "00000000-0000-4000-8000-000000000003";
 const KOUNT_SESSION = "00000000000040008000000000000003";
 const KDDCGID = "00000000-0000-4000-8000-000000000001";
 
+/** A collect=true config with the full boolean flag set the SDK requires. */
+const COLLECT_TRUE_CONFIG = JSON.stringify({
+  collection: {
+    collect: true,
+    feature_flags: {
+      app: true,
+      page: true,
+      ui: true,
+      exp: true,
+      battery: true,
+      browser: true,
+      passLoc: true,
+    },
+  },
+});
+
 describe("SyntheticFraudNetDeviceDataProvider", () => {
   it("emits a fresh Braintree-shaped correlation value", async () => {
     const provider = new SyntheticFraudNetDeviceDataProvider(
@@ -106,16 +122,75 @@ describe("AmcKountSessionProvider", () => {
     ]);
   });
 
+  it("returns initialized immediately for a valid collect=false config (no collection run)", async () => {
+    // Exact live shape: top keys collection+ttlms; collect=false; flags object.
+    const http = new FakeRiskHttp([
+      { status: 201, bodyText: "" },
+      {
+        status: 200,
+        bodyText: JSON.stringify({
+          collection: { collect: false, feature_flags: {} },
+          ttlms: 900000,
+        }),
+      },
+    ]);
+    const cookie = new FakeKountCookieProvider("existing-kount-cookie");
+    const provider = new AmcKountSessionProvider({
+      http,
+      firstPartyCookie: cookie,
+      createKddcgid: () => KDDCGID,
+    });
+
+    await expect(
+      provider.initialize({
+        orderToken: ORDER_TOKEN,
+        sessionId: KOUNT_SESSION,
+      }),
+    ).resolves.toEqual({ initialized: true, sessionId: KOUNT_SESSION });
+
+    // Exactly session + config: no storecookie, no generatecookie, no writes.
+    expect(http.requests.map((request) => request.url)).toEqual([
+      `https://ssl.kaptcha.com/session/${KOUNT_SESSION}?kddcgid=${KDDCGID}&impl=module&repo=npm`,
+      `https://ssl.kaptcha.com/cs/config?m=602840&s=${KOUNT_SESSION}&sv=2.2.3&kddcgid=${KDDCGID}&impl=module&repo=npm`,
+    ]);
+    expect(cookie.saved).toEqual([]);
+  });
+
+  it("accepts collect=false with a populated feature_flags object (flags not validated)", async () => {
+    const http = new FakeRiskHttp([
+      { status: 201, bodyText: "" },
+      {
+        status: 200,
+        bodyText: JSON.stringify({
+          collection: {
+            collect: false,
+            feature_flags: { app: "not-a-boolean" },
+          },
+        }),
+      },
+    ]);
+    const provider = new AmcKountSessionProvider({
+      http,
+      firstPartyCookie: new FakeKountCookieProvider(null),
+      createKddcgid: () => KDDCGID,
+    });
+
+    await expect(
+      provider.initialize({
+        orderToken: ORDER_TOKEN,
+        sessionId: KOUNT_SESSION,
+      }),
+    ).resolves.toEqual({ initialized: true, sessionId: KOUNT_SESSION });
+    expect(http.requests).toHaveLength(2);
+  });
+
   it.each([
     [
       "missing first-party cookie",
       null,
       [
         { status: 201, bodyText: "" },
-        {
-          status: 200,
-          bodyText: '{"collection":{"collect":true,"feature_flags":{}}}',
-        },
+        { status: 200, bodyText: COLLECT_TRUE_CONFIG },
       ],
     ],
     ["rejected new-session post", "cookie", [{ status: 500, bodyText: "" }]],
@@ -128,7 +203,26 @@ describe("AmcKountSessionProvider", () => {
       ],
     ],
     [
-      "rejected cookie post",
+      "nonboolean collect",
+      "cookie",
+      [
+        { status: 201, bodyText: "" },
+        {
+          status: 200,
+          bodyText: '{"collection":{"collect":"false","feature_flags":{}}}',
+        },
+      ],
+    ],
+    [
+      "collect=false without feature_flags",
+      "cookie",
+      [
+        { status: 201, bodyText: "" },
+        { status: 200, bodyText: '{"collection":{"collect":false}}' },
+      ],
+    ],
+    [
+      "collect=true with incomplete feature flag booleans",
       "cookie",
       [
         { status: 201, bodyText: "" },
@@ -136,6 +230,14 @@ describe("AmcKountSessionProvider", () => {
           status: 200,
           bodyText: '{"collection":{"collect":true,"feature_flags":{}}}',
         },
+      ],
+    ],
+    [
+      "rejected cookie post",
+      "cookie",
+      [
+        { status: 201, bodyText: "" },
+        { status: 200, bodyText: COLLECT_TRUE_CONFIG },
         { status: 500, bodyText: "" },
       ],
     ],
@@ -228,10 +330,7 @@ describe("AmcKountSessionProvider /cs/generatecookie fallback", () => {
   it("generates and persists a first-party cookie when none is present", async () => {
     const http = new FakeRiskHttp([
       { status: 201, bodyText: "" },
-      {
-        status: 200,
-        bodyText: '{"collection":{"collect":true,"feature_flags":{}}}',
-      },
+      { status: 200, bodyText: COLLECT_TRUE_CONFIG },
       { status: 200, bodyText: JSON.stringify({ value: "generated-kount" }) },
     ]);
     const cookie = new FakeKountCookieProvider(null);
@@ -257,10 +356,7 @@ describe("AmcKountSessionProvider /cs/generatecookie fallback", () => {
   it("falls back to generation when storecookie is rejected with a 500", async () => {
     const http = new FakeRiskHttp([
       { status: 201, bodyText: "" },
-      {
-        status: 200,
-        bodyText: '{"collection":{"collect":true,"feature_flags":{}}}',
-      },
+      { status: 200, bodyText: COLLECT_TRUE_CONFIG },
       { status: 500, bodyText: "" },
       { status: 200, bodyText: JSON.stringify({ value: "regenerated" }) },
     ]);
@@ -283,10 +379,7 @@ describe("AmcKountSessionProvider /cs/generatecookie fallback", () => {
   it("fails closed when generation returns an invalid cookie payload", async () => {
     const http = new FakeRiskHttp([
       { status: 201, bodyText: "" },
-      {
-        status: 200,
-        bodyText: '{"collection":{"collect":true,"feature_flags":{}}}',
-      },
+      { status: 200, bodyText: COLLECT_TRUE_CONFIG },
       { status: 200, bodyText: "{}" },
     ]);
     const cookie = new FakeKountCookieProvider(null);
