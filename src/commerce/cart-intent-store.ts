@@ -1,4 +1,5 @@
 import { SessionKey, SessionStore } from "../auth-session";
+import type { PendingWriteStore } from "./pending-write-store";
 import { CartCreateIntent } from "./executor";
 import {
   canonicalIntent,
@@ -8,12 +9,9 @@ import {
 } from "./intent-identity";
 
 /**
- * Immutable identity of a cart hold. This is the ONLY durable record the
- * commerce layer keeps about a created cart: the original intent (needed to
- * project the provider order by exact seats/SKU) keyed by the provider order
- * token. It carries NO lifecycle state, total, or confirmation — the provider
- * order projection is the sole source of truth for what a cart/order currently
- * is. Append-only and version-stamped.
+ * Immutable identity of a cart hold: the original intent (to project the
+ * provider order by exact seats/SKU) keyed by the order token. No lifecycle
+ * state/total/confirmation — the provider projection is the sole truth.
  */
 export interface CartIntentRecord {
   version: 2;
@@ -47,18 +45,16 @@ function selectionAliasKey(
 }
 
 /**
- * Append-only store of {@link CartIntentRecord}s over the atomic mode-0600
- * SessionStore. A token-hash primary key holds the record; a selection alias
- * (showtime + sorted seats) points at the NEWEST token for that selection so a
+ * Append-only store of {@link CartIntentRecord}s over the atomic SessionStore.
+ * Token-hash primary key; a selection alias points at the NEWEST token so a
  * tokenless recovery can find the last cart for a physical seat set.
  */
 export class CartIntentStore {
   constructor(private readonly store: SessionStore) {}
 
   /**
-   * Persist the immutable intent identity for a freshly created cart. Called
-   * synchronously in cart-create `onToken`, BEFORE the projection read, so the
-   * identity survives a later projection failure (AMC_CART_HOLD_UNCONFIRMED).
+   * Persist the immutable intent for a fresh cart, synchronously in cart-create
+   * `onToken` (before the projection read) so identity survives a later failure.
    */
   async record(input: {
     orderToken: string;
@@ -89,14 +85,10 @@ export class CartIntentStore {
     if (!nonEmpty(orderToken)) throw new RecoveryStoreCorruptError();
     const bytes = await this.store.load(tokenKey(orderToken));
     if (bytes === null) return null;
+    // decodeRecord validates the shape and that intentHash === hash(intent);
+    // here we only additionally tamper-check the token matches its key.
     const record = decodeRecord(bytes);
-    if (
-      record.orderToken !== orderToken ||
-      record.intentHash !== computeIntentHash(record.intent) ||
-      record.intentHash !== sha256(canonicalIntent(record.intent))
-    ) {
-      throw new RecoveryStoreCorruptError();
-    }
+    if (record.orderToken !== orderToken) throw new RecoveryStoreCorruptError();
     return record;
   }
 
@@ -118,12 +110,7 @@ function seatNamesOf(intent: CartCreateIntent): string[] {
   return intent.seats.map((seat) => seat.name);
 }
 
-/**
- * The subset of legacy checkout-journal states this transitional migrator maps.
- * The old transition engine is gone; this is a read-only decoder that lets an
- * in-flight legacy hold (e.g. an A9-style PURCHASE_DISPATCHING record on a real
- * user's disk) resolve under the new provider-authoritative model.
- */
+/** A legacy checkout-journal record, read-only, for transitional migration. */
 export interface LegacyCheckoutAttempt {
   orderToken: string;
   intent: CartCreateIntent;
@@ -132,11 +119,9 @@ export interface LegacyCheckoutAttempt {
 }
 
 /**
- * Lazily read a legacy journal record for a given order token from the raw
- * SessionStore, WITHOUT deleting the legacy bytes. Returns the intent + last
- * legacy state so the caller can seed the new stores and let the provider
- * decide. Returns null when no legacy record exists; throws the typed corrupt
- * error on a tampered alias/record.
+ * Read a legacy journal record for a token from the raw SessionStore WITHOUT
+ * deleting it (so an in-flight legacy hold resolves under the new model).
+ * Returns null when absent; throws the typed corrupt error on tamper.
  */
 export async function readLegacyAttemptByToken(
   store: SessionStore,
@@ -148,12 +133,7 @@ export async function readLegacyAttemptByToken(
     account: sha256(orderToken),
   });
   if (aliasBytes === null) return null;
-  let alias: unknown;
-  try {
-    alias = JSON.parse(Buffer.from(aliasBytes).toString("utf8"));
-  } catch {
-    throw new RecoveryStoreCorruptError();
-  }
+  const alias = parseJson(aliasBytes);
   if (
     !isRecord(alias) ||
     alias.version !== 1 ||
@@ -167,12 +147,7 @@ export async function readLegacyAttemptByToken(
     account: alias.attemptId,
   });
   if (recordBytes === null) return null;
-  let legacy: unknown;
-  try {
-    legacy = JSON.parse(Buffer.from(recordBytes).toString("utf8"));
-  } catch {
-    throw new RecoveryStoreCorruptError();
-  }
+  const legacy = parseJson(recordBytes);
   if (
     !isRecord(legacy) ||
     legacy.version !== 1 ||
@@ -190,27 +165,67 @@ export async function readLegacyAttemptByToken(
   };
 }
 
+/**
+ * Resolve the immutable intent for a token, lazily migrating a legacy record on
+ * first access (read-only). RELEASED carries no identity; a mid-dispatch legacy
+ * state seeds the matching uncertainty marker for the provider to resolve.
+ */
+export async function migrateLegacyIntent(
+  rec: {
+    intents: CartIntentStore;
+    pending: PendingWriteStore;
+    store: SessionStore;
+  },
+  orderToken: string,
+): Promise<CartIntentRecord | null> {
+  const existing = await rec.intents.loadByToken(orderToken);
+  if (existing) return existing;
+  const legacy = await readLegacyAttemptByToken(rec.store, orderToken);
+  if (!legacy) return null;
+  if (legacy.state === "RELEASED") return null;
+  await rec.intents.record({
+    orderToken: legacy.orderToken,
+    intent: legacy.intent,
+    createdAt: legacy.updatedAt,
+  });
+  const marker =
+    legacy.state === "PURCHASE_DISPATCHING"
+      ? "purchase"
+      : legacy.state === "PURCHASE_CHALLENGE_DISPATCHING"
+        ? "purchase-challenge"
+        : legacy.state === "RELEASE_DISPATCHING"
+          ? "release"
+          : null;
+  if (marker) {
+    await rec.pending.mark({
+      operation: marker,
+      key: orderToken,
+      intentHash: computeIntentHash(legacy.intent),
+      dispatchedAt: legacy.updatedAt,
+    });
+  }
+  return rec.intents.loadByToken(orderToken);
+}
+
 function encode(value: unknown): Uint8Array {
   return Buffer.from(JSON.stringify(value), "utf8");
 }
 
-function decodeRecord(bytes: Uint8Array): CartIntentRecord {
-  let parsed: unknown;
+/** Parse stored JSON, mapping any malformed payload to the typed corrupt error. */
+function parseJson(bytes: Uint8Array): unknown {
   try {
-    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+    return JSON.parse(Buffer.from(bytes).toString("utf8"));
   } catch {
     throw new RecoveryStoreCorruptError();
   }
-  return validate(parsed);
+}
+
+function decodeRecord(bytes: Uint8Array): CartIntentRecord {
+  return validate(parseJson(bytes));
 }
 
 function decodeAlias(bytes: Uint8Array): { version: 2; orderToken: string } {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
-  } catch {
-    throw new RecoveryStoreCorruptError();
-  }
+  const parsed = parseJson(bytes);
   if (
     !isRecord(parsed) ||
     parsed.version !== 2 ||
@@ -243,27 +258,7 @@ function validate(value: unknown): CartIntentRecord {
   ) {
     throw new RecoveryStoreCorruptError();
   }
-  const allowed = new Set([
-    "version",
-    "orderToken",
-    "intent",
-    "intentHash",
-    "checkoutSessionId",
-    "createdAt",
-  ]);
-  if (Object.keys(value).some((k) => !allowed.has(k))) {
-    throw new RecoveryStoreCorruptError();
-  }
-  return {
-    version: 2,
-    orderToken: value.orderToken,
-    intent: structuredClone(value.intent),
-    intentHash: value.intentHash,
-    ...(value.checkoutSessionId
-      ? { checkoutSessionId: value.checkoutSessionId }
-      : {}),
-    createdAt: value.createdAt,
-  };
+  return structuredClone(value) as unknown as CartIntentRecord;
 }
 
 function validateIntent(value: unknown): asserts value is CartCreateIntent {

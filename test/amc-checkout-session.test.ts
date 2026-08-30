@@ -62,10 +62,6 @@ class FakeService {
     status: "CONFIRMED" as const,
     reconciled: false,
   });
-  recoverCheckout = async () => ({
-    kind: "cart" as const,
-    cart: structuredClone(cart),
-  });
 }
 
 describe("AMC checkout sessions", () => {
@@ -109,26 +105,5 @@ describe("AMC checkout sessions", () => {
         email: "guest@example.test",
       }),
     ).rejects.toBeInstanceOf(CheckoutSessionOwnershipError);
-  });
-
-  it("adopts only a cart returned by its own recovery request", async () => {
-    const service = new FakeService();
-    const session = new AmcCheckoutSession(
-      service as unknown as AmcCommerceService,
-      "conversation-a",
-    );
-
-    const recovered = await session.recoverCheckout({
-      showtimeId: intent.showtimeId,
-      seatNames: ["J3"],
-      email: "guest@example.test",
-    });
-    expect(recovered).toMatchObject({ kind: "cart" });
-    await expect(
-      session.previewCheckout({
-        orderToken: cart.orderToken,
-        email: "guest@example.test",
-      }),
-    ).resolves.toMatchObject({ orderToken: cart.orderToken });
   });
 });

@@ -76,10 +76,7 @@ export interface AmcCommerceProjectionProvider {
     email?: string,
     intent?: CartCreateIntent,
   ): Promise<CartSnapshot>;
-  /**
-   * Decide an order's current lifecycle from ONE fresh projection. The provider
-   * order is the sole source of truth the commerce layer consults.
-   */
+  /** Decide an order's lifecycle from ONE fresh projection (sole source of truth). */
   projectLifecycle(
     orderToken: string,
     opts: { intent?: CartCreateIntent; now: Date },
@@ -156,21 +153,18 @@ export class ScopedAmcGraphqlClient {
     envelope: GraphqlEnvelope<Variables>,
   ): Promise<unknown> {
     return this.runtime.withAuthenticatedWrite(async (context) => {
-      // Bounded write budget: AT MOST two mutation dispatches, and AT MOST one
-      // recovery action between them — either a single same-session retry after
-      // a complete HTTP 429, OR a single bounded direct session re-admission
-      // after a complete anti-bot challenge. Whatever happens on the second
-      // dispatch is terminal; there is never a third. A transport throw (no
-      // complete HTTP response) is NEVER retried and stays ambiguous.
+      // Bounded write budget: at most two dispatches and one recovery action
+      // (a single 429 same-session retry OR one direct re-admission after a
+      // complete challenge). The second dispatch is terminal; a transport throw
+      // (no complete HTTP response) is never retried and stays ambiguous.
       let current = context;
       for (let dispatch = 0; ; dispatch++) {
         let response: { status: number; bodyText: string };
         try {
           response = await this.dispatchRaw(current, envelope, true);
         } catch (error) {
-          // Only a missing-cookie precondition is a contract error; anything
-          // else here is a transport failure with no complete HTTP response,
-          // so the outcome is genuinely unknown (bytes may have left).
+          // Missing-cookie is a contract error; anything else here is a
+          // transport failure with no complete response — genuinely unknown.
           if (error instanceof AmcGraphqlContractError) throw error;
           throw new AmbiguousWriteError(operation);
         }
@@ -180,9 +174,8 @@ export class ScopedAmcGraphqlClient {
         );
         if (outcome.kind === "ok") return outcome.value;
         if (outcome.kind === "ambiguous") {
-          // A complete 5xx does NOT prove non-execution — the origin may have
-          // mutated and then failed to respond — so it stays ambiguous with a
-          // single dispatch and no retry, exactly like a transport throw.
+          // A complete 5xx does NOT prove non-execution, so it stays ambiguous
+          // (single dispatch, no retry) like a transport throw.
           throw new AmbiguousWriteError(operation);
         }
         if (dispatch >= 1) {
@@ -207,10 +200,8 @@ export class ScopedAmcGraphqlClient {
           current = await this.runtime.refreshDirectForWrite();
           continue;
         }
-        // A COMPLETE 4xx (non-challenge 400/403, or 401 auth reject) or a
-        // contract drift is a definite rejection: the request reached the
-        // origin and was refused before mutating. Preserve the typed error;
-        // no retry beyond the explicit 429 rule above.
+        // A complete 4xx (non-challenge) or contract drift is a definite
+        // rejection: preserve the typed error, no retry beyond the 429 rule.
         throw outcome.error;
       }
     });

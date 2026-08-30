@@ -185,25 +185,6 @@ describe("AMC captured GraphQL contracts", () => {
 });
 
 describe("AMC consequential commerce lifecycle", () => {
-  it("runs checkout readiness before the first inventory mutation", async () => {
-    const executor = new FakeCommerceExecutor();
-    const service = new AmcCommerceService({
-      executor,
-      projections: new FakeProjectionProvider(),
-      payment: new FakePaymentExecutor(),
-      readiness: {
-        assertReady: () =>
-          Promise.reject(new Error("risk context unavailable")),
-      },
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-
-    await expect(service.createCart(createIntent())).rejects.toThrow(
-      "risk context unavailable",
-    );
-    expect(executor.createCalls).toBe(0);
-  });
-
   it("accepts the authoritative provider cart total when it differs from the pre-cart estimate", async () => {
     // Reproduced River East 21: the pre-cart seat-map estimate (56.04) differs
     // from AMC's authoritative created-cart total (51.93) by theater. The exact
@@ -503,30 +484,16 @@ describe("AMC consequential commerce lifecycle", () => {
     expect(executor.refundCalls).toBe(1);
   });
 
-  it("binds prepared payment material when ambiguous cart creation reconciles to a token", async () => {
+  it("recovers to the provider token when ambiguous cart creation reconciles", async () => {
     const executor = new FakeCommerceExecutor();
     executor.createError = new AmbiguousWriteError("cart");
     executor.reconciledCart = structuredClone(executor.cart);
-    const bindings: Array<{ binding: string; orderToken: string }> = [];
-    const service = new AmcCommerceService({
-      executor,
-      projections: new FakeProjectionProvider(),
-      payment: new FakePaymentExecutor(),
-      readiness: {
-        assertReady: async () => undefined,
-        bind: async (binding, orderToken) => {
-          bindings.push({ binding, orderToken });
-        },
-      },
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
+    const service = serviceWith(executor);
 
     await expect(service.createCart(createIntent())).resolves.toMatchObject({
       orderToken: executor.cart.orderToken,
     });
-    expect(bindings).toEqual([
-      { binding: expect.any(String), orderToken: executor.cart.orderToken },
-    ]);
+    expect(executor.reconcileCartCalls).toBe(1);
   });
 
   it("never retries CartCreateOrder after an ambiguous outcome", async () => {

@@ -34,11 +34,7 @@ import { CartIntentStore } from "./cart-intent-store";
 import { PendingWriteStore } from "./pending-write-store";
 import { AmcCommerceService, CheckoutRecovery } from "./service";
 
-/**
- * Build the default durable recovery bundle (immutable cart-intent store +
- * uncertainty ledger) over an atomic SessionStore. This is what the CLI wires
- * by default so token-first checkout works across processes.
- */
+/** Default durable recovery bundle (cart-intent store + uncertainty ledger) over a SessionStore. */
 export function createFileCheckoutRecovery(
   store: SessionStore,
 ): CheckoutRecovery {
@@ -50,12 +46,9 @@ export function createFileCheckoutRecovery(
 }
 
 /**
- * Explicit, non-ambient checkout capabilities. Nothing here is defaulted to a
- * home proxy, 1Password, Gmail, or any personal identity; a caller wires only
- * what it needs. Direct GraphQL cart/order/refund/expiration operations work
- * with no capabilities at all. `cardProvider` unlocks direct Braintree
- * tokenization + fulfillment; `challengeHandler` unlocks the interactive
- * 3DS/hosted-frame path; `recovery` opts into durable cross-process resume.
+ * Explicit, non-ambient checkout capabilities. Direct GraphQL operations work
+ * with none; `cardProvider` unlocks direct fulfillment, `challengeHandler` the
+ * interactive 3DS path, `recovery` durable cross-process resume.
  */
 export interface AmcCheckoutCapabilities {
   /** Supplies raw card material behind an ephemeral lease. Never in argv/JSON. */
@@ -94,10 +87,8 @@ export interface BuiltAmcCheckout {
 }
 
 /**
- * Compose the AMC commerce service from explicit seams. Direct GraphQL
- * cart/order/refund/expiration always work. Payment fulfillment is available
- * only when a `cardProvider` is supplied; otherwise checkout submit fails with
- * a typed capability error rather than an ambient default.
+ * Compose the commerce service from explicit seams. Payment fulfillment is
+ * available only when a `cardProvider` is supplied (else submit fails typed).
  */
 export function buildAmcCheckoutService(
   options: BuildAmcCheckoutServiceOptions,

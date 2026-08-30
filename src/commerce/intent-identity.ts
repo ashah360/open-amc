@@ -1,11 +1,7 @@
 import { createHash } from "node:crypto";
 import { CartCreateIntent } from "./executor";
 
-/**
- * Canonical, stable JSON serialization of a cart intent used to derive the
- * `intentHash` identity. Seats are normalized and order-independent so the same
- * logical intent always hashes identically across processes.
- */
+/** Canonical, order-independent JSON of a cart intent; the basis for `intentHash`. */
 export function canonicalIntent(intent: CartCreateIntent): string {
   return JSON.stringify({
     showtimeId: intent.showtimeId,
@@ -33,11 +29,7 @@ export function intentHash(intent: CartCreateIntent): string {
   return sha256(canonicalIntent(intent));
 }
 
-/**
- * Canonical selection key (showtime + case-insensitive, order-independent seat
- * names). Two carts for the same physical seats collide here on purpose so a
- * tokenless in-flight hold blocks a duplicate for the same selection.
- */
+/** Selection key (showtime + case-insensitive sorted seats); collides on purpose for dedup. */
 export function selectionHash(showtimeId: string, seatNames: string[]): string {
   return sha256(
     JSON.stringify({

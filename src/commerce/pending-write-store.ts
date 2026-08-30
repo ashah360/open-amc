@@ -6,12 +6,9 @@ export type PendingWriteOperation =
   "cart" | "purchase" | "purchase-challenge" | "release" | "refund";
 
 /**
- * A single outstanding consequential write whose outcome is not yet known to
- * be definite. It is the entire "uncertainty ledger": created immediately
- * before a mutation is dispatched and cleared the moment a DEFINITE response
- * (success or a proven non-execution) is observed. A transport throw or a
- * complete 5xx (ambiguous) leaves the marker in place so no duplicate mutation
- * can be issued until the provider projection resolves it.
+ * One outstanding consequential write whose outcome is not yet definite — the
+ * entire "uncertainty ledger". Created before dispatch, cleared on a DEFINITE
+ * response; an ambiguous outcome leaves it in place so no duplicate is issued.
  */
 export interface PendingWrite {
   version: 1;
@@ -29,11 +26,7 @@ function markerKey(operation: PendingWriteOperation, key: string): SessionKey {
   };
 }
 
-/**
- * At-most-one-per-(operation,key) store of {@link PendingWrite} markers over the
- * atomic mode-0600 SessionStore. There are NO normal lifecycle states here —
- * only outstanding uncertainty.
- */
+/** At-most-one-per-(operation,key) store of {@link PendingWrite} markers; only uncertainty, no states. */
 export class PendingWriteStore {
   constructor(private readonly store: SessionStore) {}
 

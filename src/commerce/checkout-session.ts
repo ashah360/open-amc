@@ -30,20 +30,6 @@ export class AmcCheckoutSession {
     return cart;
   }
 
-  async recoverCheckout(
-    input: Parameters<AmcCommerceService["recoverCheckout"]>[0],
-  ): ReturnType<AmcCommerceService["recoverCheckout"]> {
-    const recovered = await this.service.recoverCheckout({
-      ...input,
-      checkoutSessionId: this.id,
-    });
-    if (recovered?.kind === "cart")
-      this.orderTokens.add(recovered.cart.orderToken);
-    if (recovered?.kind === "confirmed")
-      this.orderTokens.add(recovered.purchase.orderToken);
-    return recovered;
-  }
-
   async releaseCart(orderToken: string): Promise<{ released: true }> {
     this.assertOwned(orderToken);
     return this.service.releaseCart(orderToken, this.id);

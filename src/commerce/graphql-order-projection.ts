@@ -102,11 +102,7 @@ export class AmcGraphqlOrderProjectionProvider implements AmcCommerceProjectionP
     return Promise.resolve(null);
   }
 
-  /**
-   * Decide an order's current lifecycle from ONE fresh projection. This is the
-   * single provider-authoritative read the commerce layer uses to answer "what
-   * is this order now?"; it never infers from local state or seat availability.
-   */
+  /** Decide an order's lifecycle from ONE fresh projection (provider-authoritative). */
   async projectLifecycle(
     orderToken: string,
     opts: { intent?: CartCreateIntent; now: Date },
@@ -238,12 +234,8 @@ function cartSnapshot(
   ) {
     throw new AmcOrderProjectionError("cart.tickets");
   }
-  // AMC's authoritative created-cart total is `remainingBalance`; it can differ
-  // from the pre-cart seat-map estimate (`intent.expectedTotal`) by theater
-  // (fee/tax schedules). Parse it as canonical money and return it as the
-  // authoritative CartSnapshot.total — do NOT reject on an estimate mismatch.
-  // Checkout submit still consents to this authoritative total from a fresh
-  // preview before any payment.
+  // `remainingBalance` is the authoritative cart total (differs from the
+  // estimate by theater); return it as-is — never reject on the estimate.
   const total = money(order.remainingBalance, "cart.remainingBalance");
   return {
     orderToken,
