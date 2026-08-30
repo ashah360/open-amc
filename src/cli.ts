@@ -60,6 +60,14 @@ export interface BuiltInBrowserRepairOptions {
    * headful. Ignored for the caller-owned `--cdp-url` connection.
    */
   headless?: boolean;
+  /**
+   * Outbound proxy URL for the LAUNCHED repair browser, so the interactive
+   * repair/CAPTCHA handoff runs on the SAME egress as the CLI's direct
+   * transport (the explicit commands thread `AMC_PROXY_URL` here). Never
+   * logged or echoed. Incompatible with `cdpUrl`: a caller-owned Chrome's
+   * egress cannot be retrofitted, so that combination fails closed.
+   */
+  proxyUrl?: string;
 }
 
 export interface AmcCliDependencies {
@@ -936,17 +944,19 @@ function buildAuthCommands(
               // Validate the URL shape and derive the canonical listing URL
               // before any browser dependency is touched.
               const resolved = resolveOfficialAmcTheaterUrl(options.listingUrl);
-              const browserRepair = createBrowserRepair({
-                listingUrl: resolved.url,
-                ...(options.browserChannel
-                  ? { channel: options.browserChannel }
-                  : {}),
-                ...(options.browserExecutable
-                  ? { executablePath: options.browserExecutable }
-                  : {}),
-                ...(options.cdpUrl ? { cdpUrl: options.cdpUrl } : {}),
-                ...(options.headless ? { headless: true } : {}),
-              });
+              const browserRepair = createBrowserRepair(
+                withSameEgressProxy({
+                  listingUrl: resolved.url,
+                  ...(options.browserChannel
+                    ? { channel: options.browserChannel }
+                    : {}),
+                  ...(options.browserExecutable
+                    ? { executablePath: options.browserExecutable }
+                    : {}),
+                  ...(options.cdpUrl ? { cdpUrl: options.cdpUrl } : {}),
+                  ...(options.headless ? { headless: true } : {}),
+                }),
+              );
               await client.auth.repair({
                 browserRepair,
                 listingUrl: resolved.url,
@@ -1012,21 +1022,23 @@ function buildAuthCommands(
               !options.browserChannel &&
               !options.browserExecutable &&
               !options.cdpUrl;
-            const browserRepair = createBrowserRepair({
-              listingUrl: resolved.url,
-              // Default to the visible installed Chrome channel: the reliable
-              // path per live evidence. Explicit selectors always win.
-              ...(options.browserChannel
-                ? { channel: options.browserChannel }
-                : noSelector
-                  ? { channel: "chrome" }
+            const browserRepair = createBrowserRepair(
+              withSameEgressProxy({
+                listingUrl: resolved.url,
+                // Default to the visible installed Chrome channel: the reliable
+                // path per live evidence. Explicit selectors always win.
+                ...(options.browserChannel
+                  ? { channel: options.browserChannel }
+                  : noSelector
+                    ? { channel: "chrome" }
+                    : {}),
+                ...(options.browserExecutable
+                  ? { executablePath: options.browserExecutable }
                   : {}),
-              ...(options.browserExecutable
-                ? { executablePath: options.browserExecutable }
-                : {}),
-              ...(options.cdpUrl ? { cdpUrl: options.cdpUrl } : {}),
-              ...(options.headless ? { headless: true } : {}),
-            });
+                ...(options.cdpUrl ? { cdpUrl: options.cdpUrl } : {}),
+                ...(options.headless ? { headless: true } : {}),
+              }),
+            );
             // Exactly one bounded explicit repair; success is already gated by
             // the direct canary before the session persists.
             await client.auth.repair({
@@ -1074,30 +1086,118 @@ function buildAuthCommands(
 function builtInPlaywrightBrowserRepair(
   options: BuiltInBrowserRepairOptions,
 ): AmcBrowserRefresher {
+  // Resolve (and validate) the connection FIRST so a proxy/CDP policy failure
+  // is thrown before the browser adapter is even required.
+  const connection = builtInRepairConnection(options);
   const adapter = createRequire(__filename)(
     "./capabilities/browser/playwright",
   ) as typeof import("./capabilities/browser/playwright");
-  const runtime = new adapter.PlaywrightBrowserRuntime(
-    builtInRepairConnection(options),
-  );
+  const runtime = new adapter.PlaywrightBrowserRuntime(connection);
   return new adapter.PlaywrightAmcBrowserRefresher({
     runtime,
     listingUrl: options.listingUrl,
   });
 }
 
+/** Static, value-free guidance for every rejected browser-repair proxy URL. */
+const BROWSER_PROXY_URL_INVALID =
+  "AMC_PROXY_URL is not a proxy URL the launched repair browser can use: it must be http://, https://, socks4://, socks5://, or socks:// with host[:port] only (no path or query), and percent-encoded credentials are supported for http/https proxies only (Chromium cannot authenticate SOCKS proxies). The value is never echoed; correct AMC_PROXY_URL and rerun.";
+
+/** Static, value-free explanation for the fail-closed --cdp-url + proxy combination. */
+const CDP_PROXY_MISMATCH =
+  "AMC_PROXY_URL is configured, but --cdp-url attaches to a Chrome this CLI did not launch, so its egress cannot be guaranteed to match the CLI's proxy — repair could export a session from the wrong egress and falsely claim success. Launch the repair browser instead (--browser-channel chrome or --browser-executable <path>), which inherits AMC_PROXY_URL automatically; or unset AMC_PROXY_URL only if that Chrome genuinely shares the CLI's default egress.";
+
+const BROWSER_PROXY_PROTOCOLS = new Set([
+  "http:",
+  "https:",
+  "socks:",
+  "socks4:",
+  "socks5:",
+]);
+
+/**
+ * Parse a proxy URL for Playwright's `launch({ proxy })` shape:
+ * `{ server, username?, password? }`. Accepts only the http/https/socks
+ * schemes the direct transport accepts, requires a bare host[:port] (no path,
+ * query, or fragment), decodes percent-encoded credentials exactly once, and
+ * allows credentials for http/https only (Chromium cannot authenticate SOCKS
+ * proxies, and silently dropping credentials would change the egress). Every
+ * rejection is the same typed, static error that never echoes any part of the
+ * value.
+ */
+export function parseBrowserProxyUrl(raw: string): {
+  server: string;
+  username?: string;
+  password?: string;
+} {
+  const fail = () => new CliSetupError(BROWSER_PROXY_URL_INVALID);
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw fail();
+  }
+  if (!BROWSER_PROXY_PROTOCOLS.has(url.protocol)) throw fail();
+  if (!url.hostname) throw fail();
+  if ((url.pathname !== "" && url.pathname !== "/") || url.search || url.hash) {
+    throw fail();
+  }
+  const hasCredentials = url.username !== "" || url.password !== "";
+  if (hasCredentials && url.protocol !== "http:" && url.protocol !== "https:") {
+    throw fail();
+  }
+  let username: string | undefined;
+  let password: string | undefined;
+  if (hasCredentials) {
+    try {
+      // WHATWG URL keeps these percent-encoded; Playwright expects literals.
+      username = decodeURIComponent(url.username);
+      password = decodeURIComponent(url.password);
+    } catch {
+      throw fail();
+    }
+  }
+  return {
+    server: `${url.protocol}//${url.host}`,
+    ...(username !== undefined && username !== "" ? { username } : {}),
+    ...(password !== undefined && password !== "" ? { password } : {}),
+  };
+}
+
+/**
+ * Thread the CLI's configured egress into the browser-repair options built by
+ * the explicit `auth repair`/`setup` commands: with AMC_PROXY_URL set, a
+ * LAUNCHED repair browser must run on that same proxy (validated eagerly so a
+ * malformed value fails typed BEFORE any browser dependency), and `--cdp-url`
+ * fails closed because a caller-owned Chrome's egress cannot be verified.
+ * Without AMC_PROXY_URL the options pass through untouched.
+ */
+function withSameEgressProxy(
+  options: BuiltInBrowserRepairOptions,
+): BuiltInBrowserRepairOptions {
+  const proxyUrl = process.env.AMC_PROXY_URL;
+  if (!proxyUrl) return options;
+  if (options.cdpUrl) throw new CliSetupError(CDP_PROXY_MISMATCH);
+  parseBrowserProxyUrl(proxyUrl);
+  return { ...options, proxyUrl };
+}
+
 /**
  * Pure resolver for the built-in repair's Playwright connection, extracted so
  * the launch/headless policy is testable without a real browser. A caller-owned
  * `--cdp-url` connection is used as-is (launch mode, including `--headless`, is
- * irrelevant to it). A launched browser defaults to VISIBLE/headful because
- * live evidence shows headless is far more likely to be blocked by AMC's
- * anti-bot layer; `--headless` opts into best-effort headless.
+ * irrelevant to it) but is incompatible with a configured proxy (fail closed;
+ * see {@link parseBrowserProxyUrl}). A launched browser defaults to
+ * VISIBLE/headful because live evidence shows headless is far more likely to
+ * be blocked by AMC's anti-bot layer; `--headless` opts into best-effort
+ * headless. A configured `proxyUrl` becomes the launched browser's proxy so
+ * repair runs on the SAME egress as the CLI's direct transport.
  */
 export function builtInRepairConnection(
   options: BuiltInBrowserRepairOptions,
 ): PlaywrightConnection {
   if (options.cdpUrl) {
+    if (options.proxyUrl) throw new CliSetupError(CDP_PROXY_MISMATCH);
     return { kind: "cdp", endpointURL: options.cdpUrl };
   }
   return {
@@ -1106,6 +1206,9 @@ export function builtInRepairConnection(
     ...(options.channel ? { channel: options.channel } : {}),
     ...(options.executablePath
       ? { executablePath: options.executablePath }
+      : {}),
+    ...(options.proxyUrl
+      ? { proxy: parseBrowserProxyUrl(options.proxyUrl) }
       : {}),
   };
 }

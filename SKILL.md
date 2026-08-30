@@ -122,7 +122,12 @@ valid session) are not fixed by repair. If a read fails with
 1. `amc auth repair --listing-url "<official theater URL>" --browser-channel
    chrome --json` (or `--browser-executable <path>` / `--cdp-url <url>`). A
    launched browser opens visible/headful by default (most reliable);
-   `--headless` exists for servers but is best-effort and often blocked.
+   `--headless` exists for servers but is best-effort and often blocked. A
+   launched browser automatically uses the CLI's `AMC_PROXY_URL` egress; if an
+   interactive Cloudflare challenge (Turnstile/CAPTCHA) appears, the human
+   completes it in that window while repair waits. `--cdp-url` combined with
+   `AMC_PROXY_URL` fails closed (`AMC_CLI_SETUP`) because a caller-owned
+   Chrome's egress cannot be verified.
 2. Re-run the failed read once. If it fails again, stop and report — no retry
    loops.
 

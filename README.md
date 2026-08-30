@@ -440,6 +440,20 @@ AMC's anti-bot layer — use an ordinary, non-headless Chrome profile you alread
 use on amctheatres.com, or a different egress/proxy, rather than repeating the
 command.
 
+A launched repair browser runs on the **same egress as the CLI's direct
+transport**: when `AMC_PROXY_URL` is set, `amc auth repair`/`amc setup` pass
+that proxy (http/https/socks, with percent-encoded credentials supported for
+http/https) to the launched Chrome, so the session it exports was actually
+established through the CLI's configured egress. Proxy credentials never appear
+in argv, logs, or error output. If Cloudflare presents an interactive challenge
+(Turnstile/CAPTCHA) in the visible window, complete it by hand — repair keeps
+waiting and exports only after a browser-side Graph AccessCheck succeeds from
+that same context, and a successful explicit repair also lifts the Cloudflare
+write cooldown for one probe write. Combining `--cdp-url` with `AMC_PROXY_URL`
+fails closed with `AMC_CLI_SETUP`: the egress of a Chrome this CLI did not
+launch cannot be verified, so launch the repair browser instead, or unset
+`AMC_PROXY_URL` only if that Chrome genuinely shares the CLI's default egress.
+
 ### JSON output contract
 
 With `--json` (accepted before or after the subcommand), every command

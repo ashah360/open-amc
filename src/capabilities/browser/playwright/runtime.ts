@@ -73,6 +73,16 @@ export interface PlaywrightModule {
  * - `cdp`: connect to an already-running Chrome over a CDP endpoint.
  * - `browser`/`context`: reuse a caller-owned Playwright object.
  */
+/**
+ * Playwright's launch proxy shape. Credentials are held only in memory for the
+ * launch call and are never logged or echoed in errors.
+ */
+export interface PlaywrightProxyConfig {
+  readonly server: string;
+  readonly username?: string;
+  readonly password?: string;
+}
+
 export type PlaywrightConnection =
   | {
       readonly kind: "launch";
@@ -80,6 +90,7 @@ export type PlaywrightConnection =
       readonly executablePath?: string;
       readonly headless?: boolean;
       readonly args?: readonly string[];
+      readonly proxy?: PlaywrightProxyConfig;
       readonly launchOptions?: Record<string, unknown>;
     }
   | {
@@ -475,6 +486,7 @@ export class PlaywrightBrowserRuntime {
         ? { executablePath: this.connection.executablePath }
         : {}),
       ...(this.connection.args ? { args: [...this.connection.args] } : {}),
+      ...(this.connection.proxy ? { proxy: { ...this.connection.proxy } } : {}),
       ...(this.connection.launchOptions ?? {}),
     };
     try {

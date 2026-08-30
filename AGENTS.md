@@ -171,6 +171,16 @@ best-effort and is often blocked; on a `browser-trust` failure the guidance
 below applies. `--cdp-url` connects to a Chrome you already launched, so the
 headless/headful choice is yours.
 
+A LAUNCHED repair browser runs on the **same egress as the CLI**: with
+`AMC_PROXY_URL` set, repair/setup pass that proxy to the launched Chrome
+(credentials are never logged or echoed). If Cloudflare shows an interactive
+challenge (Turnstile/CAPTCHA) in the visible window, the human completes it
+there; repair keeps waiting and exports only after the same-context Graph
+AccessCheck succeeds. `--cdp-url` combined with `AMC_PROXY_URL` **fails closed**
+(`AMC_CLI_SETUP`): a caller-owned Chrome's egress cannot be verified, so launch
+the repair browser instead, or unset `AMC_PROXY_URL` only if that Chrome truly
+shares the CLI's egress.
+
 Browser repair is one bounded operation: after the listing renders it runs a
 harmless browser-side GraphQL AccessCheck and waits (up to ~40s) for the
 anti-bot layer (Cloudflare jsd) to settle before exporting cookies, so a

@@ -32,6 +32,34 @@ describe("PlaywrightBrowserRuntime.acquire", () => {
     expect(browser.newContextCalls).toBe(1);
   });
 
+  it("passes a configured proxy through to chromium.launch (same egress as the CLI)", async () => {
+    const browser = new FakePlaywrightBrowser();
+    const module = fakePlaywrightModule({ launch: browser });
+    const runtime = new PlaywrightBrowserRuntime(
+      {
+        kind: "launch",
+        channel: "chrome",
+        headless: false,
+        proxy: {
+          server: "http://proxy.example.test:8080",
+          username: "user@corp",
+          password: "p#ss%w",
+        },
+      },
+      { loadModule: async () => module },
+    );
+
+    await runtime.acquire();
+
+    expect(module.chromium.launchCalls[0]).toMatchObject({
+      proxy: {
+        server: "http://proxy.example.test:8080",
+        username: "user@corp",
+        password: "p#ss%w",
+      },
+    });
+  });
+
   it("connects over CDP passing endpointURL and options positionally, owning a disconnect boundary", async () => {
     const browser = new FakePlaywrightBrowser();
     const module = fakePlaywrightModule({ connect: browser });
