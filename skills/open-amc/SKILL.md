@@ -123,11 +123,14 @@ valid session) are not fixed by repair. If a read fails with
    chrome --json` (or `--browser-executable <path>` / `--cdp-url <url>`). A
    launched browser opens visible/headful by default (most reliable);
    `--headless` exists for servers but is best-effort and often blocked. A
-   launched browser automatically uses the CLI's `AMC_PROXY_URL` egress; if an
-   interactive Cloudflare challenge (Turnstile/CAPTCHA) appears, the human
-   completes it in that window while repair waits. `--cdp-url` combined with
-   `AMC_PROXY_URL` fails closed (`AMC_CLI_SETUP`) because a caller-owned
-   Chrome's egress cannot be verified.
+   launched browser automatically uses the CLI's `AMC_PROXY_URL` egress. If
+   Cloudflare shows a simple Turnstile checkbox, repair clicks it itself (at
+   most once, only inside Cloudflare's challenge frame); a visual/image/puzzle
+   challenge still needs the human to complete it in that window while repair
+   waits — a click is never success proof, and not every challenge is
+   solvable. `--cdp-url` combined with `AMC_PROXY_URL` fails closed
+   (`AMC_CLI_SETUP`) because a caller-owned Chrome's egress cannot be
+   verified.
 2. Re-run the failed read once. If it fails again, stop and report — no retry
    loops.
 

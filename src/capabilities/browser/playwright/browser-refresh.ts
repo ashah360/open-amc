@@ -120,6 +120,127 @@ interface AdmissionSignals {
   showtimeLinks: number;
 }
 
+/** Outcome of one bounded Turnstile checkbox inspection. Never carries frame URLs or tokens. */
+export type TurnstileCheckboxOutcome = "clicked" | "not-found";
+
+/**
+ * Accessible names Cloudflare gives the simple Turnstile verification
+ * checkbox. Matched against the role=checkbox accessible name only, inside an
+ * allowlisted challenge frame — never against arbitrary page checkboxes.
+ */
+const TURNSTILE_CHECKBOX_NAME =
+  /verify you are human|i am human|i['’]?m not a robot/i;
+
+/**
+ * Strict fallback selector grounded in Cloudflare's Turnstile widget DOM
+ * (`label.cb-lb` / `.ctp-checkbox-label` wrap the real checkbox input). Only
+ * ever evaluated inside an allowlisted challenge frame.
+ */
+const TURNSTILE_CHECKBOX_SELECTOR =
+  'label.cb-lb input[type="checkbox"], .ctp-checkbox-label input[type="checkbox"]';
+
+/** Structural slice of a real Playwright Locator used by the clicker. */
+interface TurnstileLocator {
+  first(): TurnstileLocator;
+  count(): Promise<number>;
+  isVisible(): Promise<boolean>;
+  isEnabled(): Promise<boolean>;
+  click(options?: { timeout?: number }): Promise<void>;
+}
+
+/** Structural slice of a real Playwright Frame used by the clicker. */
+interface TurnstileFrame {
+  url(): string;
+  getByRole?(role: string, options?: { name?: RegExp }): TurnstileLocator;
+  locator?(selector: string): TurnstileLocator;
+}
+
+/**
+ * Only frames served by Cloudflare's own challenge origin, or the provider's
+ * first-party Cloudflare challenge path, may ever be inspected. An ordinary
+ * AMC page frame (any other path) never qualifies, so unrelated checkboxes on
+ * amctheatres.com can never be clicked.
+ */
+function isAllowlistedChallengeFrame(rawUrl: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (url.hostname === "challenges.cloudflare.com") return true;
+  const amcHost =
+    url.hostname === "amctheatres.com" ||
+    url.hostname.endsWith(".amctheatres.com");
+  return amcHost && url.pathname.includes("/cdn-cgi/challenge-platform");
+}
+
+/**
+ * Inspect the live page's frames for a SIMPLE Cloudflare Turnstile checkbox
+ * and click it. Strictly bounded and conservative:
+ * - only frames passing {@link isAllowlistedChallengeFrame} are inspected;
+ * - the control must be a visible, enabled role=checkbox whose accessible
+ *   name matches {@link TURNSTILE_CHECKBOX_NAME}, or match the strict
+ *   Turnstile widget selector;
+ * - eligibility probes that fail are skipped silently, but a failure of the
+ *   click itself PROPAGATES so the caller can count the attempt as spent;
+ * - returns only a safe outcome ("clicked"/"not-found") — never a frame URL,
+ *   sitekey, token, or DOM content. Visual/image/puzzle challenges expose no
+ *   such checkbox and simply stay "not-found" (a human boundary).
+ * A page without frame access (fakes, exotic runtimes) is always "not-found".
+ */
+export async function tryClickCloudflareTurnstileCheckbox(
+  page: PlaywrightPage,
+): Promise<TurnstileCheckboxOutcome> {
+  const frameSource = (page as { frames?: () => TurnstileFrame[] }).frames;
+  if (typeof frameSource !== "function") return "not-found";
+  let frames: TurnstileFrame[];
+  try {
+    frames = frameSource.call(page) ?? [];
+  } catch {
+    return "not-found";
+  }
+  for (const frame of frames) {
+    let frameUrl: string;
+    try {
+      frameUrl = frame.url();
+    } catch {
+      continue;
+    }
+    if (!isAllowlistedChallengeFrame(frameUrl)) continue;
+    const candidates: TurnstileLocator[] = [];
+    try {
+      if (typeof frame.getByRole === "function") {
+        candidates.push(
+          frame.getByRole("checkbox", { name: TURNSTILE_CHECKBOX_NAME }),
+        );
+      }
+      if (typeof frame.locator === "function") {
+        candidates.push(frame.locator(TURNSTILE_CHECKBOX_SELECTOR));
+      }
+    } catch {
+      continue;
+    }
+    for (const candidate of candidates) {
+      let target: TurnstileLocator;
+      try {
+        target = candidate.first();
+        if ((await candidate.count()) === 0) continue;
+        if (!(await target.isVisible()) || !(await target.isEnabled())) {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      // Deliberately NOT caught: a failed click still spends the caller's
+      // single attempt, so a flaky challenge frame can never be re-clicked.
+      await target.click({ timeout: 3_000 });
+      return "clicked";
+    }
+  }
+  return "not-found";
+}
+
 export interface PlaywrightAmcBrowserRefresherOptions {
   /** The concrete Playwright runtime/connection to acquire a context from. */
   runtime: PlaywrightBrowserRuntime;
@@ -162,6 +283,12 @@ export interface PlaywrightAmcBrowserRefresherOptions {
    * to running {@link BROWSER_ACCESS_CHECK_SCRIPT} in the listing page.
    */
   browserTrustFetcher?: (page: PlaywrightPage) => Promise<BrowserAccessCheck>;
+  /**
+   * Test/advanced seam for the bounded Turnstile checkbox inspection run
+   * during admission settlement. Defaults to
+   * {@link tryClickCloudflareTurnstileCheckbox}.
+   */
+  checkboxClicker?: (page: PlaywrightPage) => Promise<TurnstileCheckboxOutcome>;
 }
 
 /**
@@ -186,6 +313,9 @@ export class PlaywrightAmcBrowserRefresher implements AmcBrowserRefresher {
   private readonly browserTrustFetcher?: (
     page: PlaywrightPage,
   ) => Promise<BrowserAccessCheck>;
+  private readonly checkboxClicker: (
+    page: PlaywrightPage,
+  ) => Promise<TurnstileCheckboxOutcome>;
 
   constructor(options: PlaywrightAmcBrowserRefresherOptions) {
     this.runtime = options.runtime;
@@ -205,6 +335,8 @@ export class PlaywrightAmcBrowserRefresher implements AmcBrowserRefresher {
     this.fingerprintFetcher = options.fingerprintFetcher;
     this.requireBrowserGraphTrust = options.requireBrowserGraphTrust ?? true;
     this.browserTrustFetcher = options.browserTrustFetcher;
+    this.checkboxClicker =
+      options.checkboxClicker ?? tryClickCloudflareTurnstileCheckbox;
   }
 
   async refresh(
@@ -340,6 +472,10 @@ export class PlaywrightAmcBrowserRefresher implements AmcBrowserRefresher {
     page: PlaywrightPage,
     signal?: AbortSignal,
   ): Promise<boolean> {
+    // At most ONE Turnstile checkbox click per repair invocation. A click is
+    // never success proof: the loop keeps requiring real admission, and the
+    // browser-trust AccessCheck still gates the export afterwards.
+    let checkboxAttempted = false;
     for (let attempt = 0; attempt < this.admissionAttempts; attempt++) {
       if (signal?.aborted) throw new BrowserOperationTimeoutError("aborted");
       let signals: AdmissionSignals | null = null;
@@ -360,6 +496,20 @@ export class PlaywrightAmcBrowserRefresher implements AmcBrowserRefresher {
         signals.movieSections > 0
       ) {
         return true;
+      }
+      // Not admitted yet: if Cloudflare exposes a SIMPLE Turnstile checkbox in
+      // an allowlisted challenge frame, click it once and keep settling.
+      // "not-found" keeps inspecting on later polls (a managed challenge may
+      // reveal the checkbox late, auto-settle, or need the human in the
+      // visible window); a click failure spends the single attempt too.
+      if (!checkboxAttempted) {
+        try {
+          if ((await this.checkboxClicker(page)) === "clicked") {
+            checkboxAttempted = true;
+          }
+        } catch {
+          checkboxAttempted = true;
+        }
       }
       if (attempt < this.admissionAttempts - 1) {
         await page.waitForTimeout(this.admissionIntervalMs);

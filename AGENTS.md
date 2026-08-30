@@ -173,10 +173,12 @@ headless/headful choice is yours.
 
 A LAUNCHED repair browser runs on the **same egress as the CLI**: with
 `AMC_PROXY_URL` set, repair/setup pass that proxy to the launched Chrome
-(credentials are never logged or echoed). If Cloudflare shows an interactive
-challenge (Turnstile/CAPTCHA) in the visible window, the human completes it
-there; repair keeps waiting and exports only after the same-context Graph
-AccessCheck succeeds. `--cdp-url` combined with `AMC_PROXY_URL` **fails closed**
+(credentials are never logged or echoed). If Cloudflare shows a SIMPLE
+Turnstile checkbox, repair clicks it itself — at most once, only inside
+Cloudflare's own challenge frame. A visual/image/puzzle challenge still needs
+the human in the visible window; either way repair keeps waiting and exports
+only after the same-context Graph AccessCheck succeeds (a click is never
+success proof, and not every challenge is solvable). `--cdp-url` combined with `AMC_PROXY_URL` **fails closed**
 (`AMC_CLI_SETUP`): a caller-owned Chrome's egress cannot be verified, so launch
 the repair browser instead, or unset `AMC_PROXY_URL` only if that Chrome truly
 shares the CLI's egress.

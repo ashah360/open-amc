@@ -445,11 +445,15 @@ transport**: when `AMC_PROXY_URL` is set, `amc auth repair`/`amc setup` pass
 that proxy (http/https/socks, with percent-encoded credentials supported for
 http/https) to the launched Chrome, so the session it exports was actually
 established through the CLI's configured egress. Proxy credentials never appear
-in argv, logs, or error output. If Cloudflare presents an interactive challenge
-(Turnstile/CAPTCHA) in the visible window, complete it by hand — repair keeps
+in argv, logs, or error output. If Cloudflare presents a SIMPLE Turnstile
+checkbox during repair, the repair clicks it itself — at most once, and only
+inside Cloudflare's own challenge frame (never an ordinary page checkbox). A
+visual/image/puzzle challenge is a human boundary: complete it by hand in the
+visible window. Either way a click is never success proof — repair keeps
 waiting and exports only after a browser-side Graph AccessCheck succeeds from
 that same context, and a successful explicit repair also lifts the Cloudflare
-write cooldown for one probe write. Combining `--cdp-url` with `AMC_PROXY_URL`
+write cooldown for one probe write. Not every challenge is solvable; a
+challenge that never settles still fails typed within the bounded budget. Combining `--cdp-url` with `AMC_PROXY_URL`
 fails closed with `AMC_CLI_SETUP`: the egress of a Chrome this CLI did not
 launch cannot be verified, so launch the repair browser instead, or unset
 `AMC_PROXY_URL` only if that Chrome genuinely shares the CLI's default egress.
