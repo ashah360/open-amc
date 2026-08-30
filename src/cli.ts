@@ -1241,6 +1241,8 @@ export interface AmcCliJsonError {
     message: string;
     operation?: "cart" | "checkout" | "refund" | "release";
     reconciliation?: UnknownOutcomeReconciliation;
+    /** Safe ISO time after which a write-challenge cooldown allows one probe. */
+    retryAt?: string;
   };
 }
 
@@ -1267,6 +1269,11 @@ function jsonErrorEnvelope(error: unknown): AmcCliJsonError {
       message,
     },
   };
+  // Safe write-challenge cooldown hint (valid ISO only); no other detail.
+  const retryAt = (error as { retryAt?: unknown }).retryAt;
+  if (typeof retryAt === "string" && !Number.isNaN(Date.parse(retryAt))) {
+    envelope.error.retryAt = retryAt;
+  }
   if (!(error instanceof UnknownWriteOutcomeError)) return envelope;
   const operation = (error as { operation?: unknown }).operation;
   if (typeof operation === "string" && CLI_OPERATIONS.has(operation)) {

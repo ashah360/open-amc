@@ -44,6 +44,7 @@ export type { AmcAuthStatus, AmcSessionContext } from "./client/runtime";
 export {
   AmcBootstrapRequiredError,
   AmcSessionRepairRequiredError,
+  WriteChallengeCooldownError,
 } from "./client/runtime";
 export type { AmcSession } from "./client/session";
 export {

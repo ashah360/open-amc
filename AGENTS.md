@@ -44,9 +44,16 @@ amc doctor --json
   redispatched once in the same session (persistent → typed
   `AMC_WRITE_RATE_LIMITED`), and a COMPLETE anti-bot challenge (the edge
   rejected the request before the mutation ran) triggers exactly one bounded
-  **direct** session re-admission — never a browser — then one redispatch
+  **  direct** session re-admission — never a browser — then one redispatch
   (persistent → typed `AMC_WRITE_CHALLENGED`; if re-admission needs a browser
-  it stops with `AMC_SESSION_REPAIR_REQUIRED`). Those typed codes are definite
+  it stops with `AMC_SESSION_REPAIR_REQUIRED`). A **Cloudflare CAPTCHA** write
+  response is different: it is an interactive human boundary that immediate
+  re-admission cannot clear, so the FIRST one trips a per-session write-challenge
+  **circuit breaker** — no redispatch — and fails typed `AMC_WRITE_CHALLENGE_COOLDOWN`
+  with a safe `retryAt`. While the cooldown is active every write fails fast
+  with that same code and zero provider mutation (reads keep working); wait
+  until `retryAt`, or establish a fresh egress/session and run `amc auth repair`
+  (or `amc auth clear`), which lifts it for one probe. Those typed codes are definite
   failures safe to rerun later — not unknown outcomes. A complete non-challenge
   **4xx** (e.g. `AMC_HTTP` 400/403) is likewise a definite rejection, not
   auto-retried. A complete **5xx**, however, is NOT proof of non-execution (the

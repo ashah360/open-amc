@@ -260,6 +260,40 @@ describe("CLI JSON error envelope preserves safe reconciliation context", () => 
     });
   });
 
+  it("emits a safe retryAt for a write-challenge cooldown and nothing else sensitive", async () => {
+    const cooldown = Object.assign(
+      new Error(
+        "AMC writes are paused until 2030-01-15T08:30:00.000Z: a Cloudflare CAPTCHA blocked a write.",
+      ),
+      {
+        code: "AMC_WRITE_CHALLENGE_COOLDOWN",
+        retryAt: "2030-01-15T08:30:00.000Z",
+      },
+    );
+    Object.assign(cooldown, {
+      response: { headers: { cookie: "SECRET" }, body: "<html>SECRET</html>" },
+      proxyUrl: "http://SECRET@proxy.example",
+    });
+    const client = stubClient({
+      orders: {
+        createCart: vi.fn(async () => {
+          throw cooldown;
+        }),
+      },
+    });
+    const { code, out } = await run(
+      ["cart", "create", "--showtime", "900000004", "--seat", "A2", "--json"],
+      client,
+    );
+    expect(code).toBe(1);
+    const { error } = singleJsonError(out);
+    expect(error.code).toBe("AMC_WRITE_CHALLENGE_COOLDOWN");
+    expect(error.retryAt).toBe("2030-01-15T08:30:00.000Z");
+    expect(error.operation).toBeUndefined();
+    expect(error.reconciliation).toBeUndefined();
+    expect(out[0]).not.toContain("SECRET");
+  });
+
   it("excludes adversarial extra properties and non-allowlisted reconciliation keys", async () => {
     const hostile = new CheckoutOutcomeUnknownError("ambiguous", {
       orderToken: "tok",

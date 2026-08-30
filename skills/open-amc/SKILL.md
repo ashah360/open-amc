@@ -101,7 +101,13 @@ object; failures emit `{"error":{"code","message",...}}`. Help/usage output
    edge blocked before the mutation ran) and nothing executed — wait briefly
    and rerun the same command once; no reconcile needed. A persistent challenge
    may need an explicit `amc auth repair`.
-6. On an interactive payment challenge (3DS / user action required), stop and
+6. `AMC_WRITE_CHALLENGE_COOLDOWN` means a Cloudflare CAPTCHA blocked a write on
+   this egress/session and a per-session circuit breaker is now active: nothing
+   executed, and every write fails fast until the `retryAt` in the error (reads
+   still work). Do NOT retry writes in a loop — wait until `retryAt`, or move to
+   a fresh egress/session and run `amc auth repair` (or `amc auth clear`), which
+   allows one probe write. No reconcile is needed.
+7. On an interactive payment challenge (3DS / user action required), stop and
    hand the flow to the human.
 
 ## Procedure: session repair (explicit, at most once)

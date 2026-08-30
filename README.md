@@ -294,11 +294,24 @@ never more than two mutation dispatches total:
 - A COMPLETE HTTP 429 (explicit rate-limit rejection) is redispatched exactly
   once in the same session; a persistent 429 surfaces as the typed
   `AMC_WRITE_RATE_LIMITED`.
-- A COMPLETE anti-bot challenge (a Cloudflare 403 the edge blocked before the
-  origin mutation) triggers exactly one bounded **direct** session
-  re-admission — never a browser — followed by one redispatch; a persistent
-  challenge surfaces as the typed `AMC_WRITE_CHALLENGED`, and if re-admission
-  needs a browser it stops with `AMC_SESSION_REPAIR_REQUIRED` (zero redispatch).
+- A COMPLETE anti-bot challenge (a Queue-it / legacy Cloudflare interstitial
+  the edge blocked before the origin mutation) triggers exactly one bounded
+  **direct** session re-admission — never a browser — followed by one
+  redispatch; a persistent challenge surfaces as the typed
+  `AMC_WRITE_CHALLENGED`, and if re-admission needs a browser it stops with
+  `AMC_SESSION_REPAIR_REQUIRED` (zero redispatch).
+- A COMPLETE **Cloudflare CAPTCHA** write response (HTML, Cloudflare-fronted,
+  with a CAPTCHA/challenge body marker) is an interactive human boundary that
+  immediate re-admission cannot clear. Cloudflare write reputation is
+  egress/session-pair state, so retrying only burns another attempt. The first
+  such response trips a persistent per-session **write-challenge circuit
+  breaker** (a tiny `{observedAt, retryAt}` record in the session store): it
+  does NOT redispatch and fails typed `AMC_WRITE_CHALLENGE_COOLDOWN` with a safe
+  `retryAt` (default 30 minutes). While active, every write fails fast with that
+  code and zero provider mutation; **reads stay available**. The breaker lifts
+  lazily at `retryAt` (allowing one probe — another CAPTCHA re-arms it), or
+  immediately after a successful explicit `amc auth repair` on a fresh
+  egress/session, or on `amc auth clear`.
 - A complete non-challenge **4xx** (e.g. `AMC_HTTP` 400/403) is a definite
   rejection: typed, one dispatch, not auto-retried.
 

@@ -45,6 +45,79 @@ export const AMC_SESSION_KEY: SessionKey = {
   account: "personal",
 };
 
+/**
+ * A tiny, session-root-scoped record for the write-challenge circuit breaker.
+ * Kept in the SAME SessionStore as the session (inheriting its private mode and
+ * atomic locking) but under its own key, so recording/clearing a cooldown never
+ * touches the session jar.
+ */
+const AMC_WRITE_COOLDOWN_KEY: SessionKey = {
+  provider: "amc",
+  account: "write-cooldown",
+};
+
+/**
+ * Protective default cooldown after one observed Cloudflare CAPTCHA write
+ * response. The provider's real reputation TTL is unknown; this is a circuit
+ * breaker, not a claim that the challenge clears at expiry.
+ */
+export const WRITE_CHALLENGE_COOLDOWN_MS = 30 * 60_000;
+
+/**
+ * Raised (with zero transport mutation) when a write is attempted while the
+ * Cloudflare CAPTCHA write-challenge circuit breaker is active, and when a
+ * write's first complete response IS that CAPTCHA. Definite (the edge blocked
+ * the request before the origin mutation): no reconciliation is needed. Carries
+ * only a safe ISO `retryAt`; it never exposes a response body, session, or
+ * egress identifier.
+ */
+export class WriteChallengeCooldownError extends Error {
+  readonly code = "AMC_WRITE_CHALLENGE_COOLDOWN";
+  constructor(readonly retryAt: string) {
+    super(
+      `AMC writes are paused until ${retryAt}: a Cloudflare CAPTCHA blocked a cart/checkout write on this session's egress, and retrying now would only burn another attempt and reputation. Wait until then, OR establish a new egress/session and run \`amc auth repair --listing-url <official AMC theater URL> --browser-channel chrome --json\`.`,
+    );
+  }
+}
+
+interface WriteCooldownRecord {
+  version: 1;
+  observedAt: string;
+  retryAt: string;
+}
+
+function isIsoTimestamp(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    !Number.isNaN(Date.parse(value))
+  );
+}
+
+function decodeWriteCooldown(bytes: Uint8Array): WriteCooldownRecord {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch {
+    throw new SessionDecodeError("AMC write-cooldown record is corrupt");
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    (parsed as { version?: unknown }).version !== 1 ||
+    !isIsoTimestamp((parsed as { observedAt?: unknown }).observedAt) ||
+    !isIsoTimestamp((parsed as { retryAt?: unknown }).retryAt)
+  ) {
+    throw new SessionDecodeError("AMC write-cooldown record is corrupt");
+  }
+  const record = parsed as WriteCooldownRecord;
+  return {
+    version: 1,
+    observedAt: record.observedAt,
+    retryAt: record.retryAt,
+  };
+}
+
 export class AmcBootstrapRequiredError extends Error {
   readonly code = "AMC_BOOTSTRAP_REQUIRED";
 }
@@ -170,6 +243,10 @@ export interface AmcRuntimeOptions {
    * AMC_SESSION_REPAIR_REQUIRED (listing-url-required).
    */
   listingUrl?: string;
+  /** Injectable clock for the write-challenge cooldown (tests). */
+  now?: () => Date;
+  /** Write-challenge cooldown duration; defaults to WRITE_CHALLENGE_COOLDOWN_MS. */
+  writeChallengeCooldownMs?: number;
 }
 
 export interface AmcAuthStatus {
@@ -385,6 +462,9 @@ export class AmcRuntime {
   }): Promise<void> {
     if (this.options.sessionRefresher) {
       await this.manager.refreshWith(this.options.sessionRefresher);
+      // A validated explicit repair clears the write-challenge cooldown so a
+      // deliberately repaired/new egress may attempt one write immediately.
+      await this.clearWriteCooldown();
       return;
     }
     const listingUrl = options?.listingUrl ?? this.admissionListingUrl;
@@ -426,6 +506,10 @@ export class AmcRuntime {
   }): Promise<void> {
     try {
       await this.manager.refreshWith(refresher);
+      // Only reached after browser trust + the post-repair direct canary pass:
+      // clear the write-challenge cooldown so a repaired/new egress gets one
+      // immediate write probe (a still-poisoned egress simply reopens it).
+      await this.clearWriteCooldown();
     } catch (error) {
       if (error instanceof AmcSessionRepairRequiredError) throw error;
       if (error instanceof BrowserRefreshUnavailableError) {
@@ -496,13 +580,70 @@ export class AmcRuntime {
     });
   }
 
-  withAuthenticatedWrite<T>(
+  async withAuthenticatedWrite<T>(
     operation: (context: AmcSessionContext) => Promise<T>,
   ): Promise<T> {
+    // Circuit breaker: consult the write-challenge cooldown BEFORE any transport
+    // work (including the session validate canary), so an active cooldown fails
+    // typed with zero write mutation. Reads never call this.
+    await this.guardWriteCooldown();
     return this.manager.withWrite(async (session) => {
       await this.flushValidationRotations(session);
       return operation(this.sessionContext(session));
     });
+  }
+
+  private now(): Date {
+    return this.options.now ? this.options.now() : new Date();
+  }
+
+  /**
+   * Fail closed with a typed cooldown error when the write-challenge circuit
+   * breaker is active. Lazily clears an expired record (allowing exactly one
+   * probe write) under the cooldown key's lock. A corrupt record fails closed
+   * via the existing session-corrupt family.
+   */
+  private async guardWriteCooldown(): Promise<void> {
+    await this.store.withRefreshLock(AMC_WRITE_COOLDOWN_KEY, async () => {
+      const bytes = await this.store.load(AMC_WRITE_COOLDOWN_KEY);
+      if (bytes === null) return;
+      const record = decodeWriteCooldown(bytes);
+      if (this.now().getTime() < Date.parse(record.retryAt)) {
+        throw new WriteChallengeCooldownError(record.retryAt);
+      }
+      // Expired: lazily clear so this write proceeds as the single probe.
+      await this.store.remove(AMC_WRITE_COOLDOWN_KEY);
+    });
+  }
+
+  /**
+   * Record the write-challenge cooldown after one observed Cloudflare CAPTCHA
+   * write response and return the safe ISO retryAt. Called by the scoped graph
+   * writer BEFORE it throws the typed cooldown error; performs no redispatch.
+   */
+  async recordWriteCooldown(): Promise<string> {
+    const observed = this.now();
+    const durationMs =
+      this.options.writeChallengeCooldownMs ?? WRITE_CHALLENGE_COOLDOWN_MS;
+    const retryAt = new Date(observed.getTime() + durationMs).toISOString();
+    const record: WriteCooldownRecord = {
+      version: 1,
+      observedAt: observed.toISOString(),
+      retryAt,
+    };
+    await this.store.withRefreshLock(AMC_WRITE_COOLDOWN_KEY, async () => {
+      await this.store.save(
+        AMC_WRITE_COOLDOWN_KEY,
+        Buffer.from(JSON.stringify(record), "utf8"),
+      );
+    });
+    return retryAt;
+  }
+
+  private async clearWriteCooldown(): Promise<void> {
+    await this.store.withRefreshLock(AMC_WRITE_COOLDOWN_KEY, () =>
+      this.store.remove(AMC_WRITE_COOLDOWN_KEY),
+    );
   }
 
   private withRead<T>(read: (session: AmcSession) => Promise<T>): Promise<T> {
@@ -655,6 +796,10 @@ export async function clearAmcSession(
   store: SessionStore = new FileSessionStore(),
 ): Promise<void> {
   await store.remove(AMC_SESSION_KEY);
+  // Clearing the session also lifts the write-challenge circuit breaker.
+  await store.withRefreshLock(AMC_WRITE_COOLDOWN_KEY, () =>
+    store.remove(AMC_WRITE_COOLDOWN_KEY),
+  );
 }
 
 class AmcAuthAdapter implements AuthAdapter<AmcSession, true> {

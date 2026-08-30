@@ -4,7 +4,11 @@ import {
   AmcChallengeError,
   AmcHttpError,
 } from "../client/client";
-import { AmcRuntime, AmcSessionContext } from "../client/runtime";
+import {
+  AmcRuntime,
+  AmcSessionContext,
+  WriteChallengeCooldownError,
+} from "../client/runtime";
 import {
   AMC_GRAPH_ORIGIN,
   AMC_ORIGIN,
@@ -182,6 +186,13 @@ export class ScopedAmcGraphqlClient {
           // (single dispatch, no retry) like a transport throw.
           throw new AmbiguousWriteError(operation);
         }
+        if (outcome.kind === "captcha") {
+          // A Cloudflare CAPTCHA is an interactive human boundary that immediate
+          // re-admission cannot clear. Record the cooldown circuit breaker
+          // BEFORE returning and fail typed — never refresh, never redispatch.
+          const retryAt = await this.runtime.recordWriteCooldown();
+          throw new WriteChallengeCooldownError(retryAt);
+        }
         if (dispatch >= 1) {
           // Second dispatch is terminal — no third call.
           if (outcome.kind === "rate-limited") {
@@ -231,10 +242,20 @@ export class ScopedAmcGraphqlClient {
     | { kind: "ok"; value: unknown }
     | { kind: "rate-limited" }
     | { kind: "challenge" }
+    | { kind: "captcha" }
     | { kind: "ambiguous" }
     | { kind: "terminal"; error: Error } {
+    // 429 stays an explicit rate-limit (one immediate retry) and 5xx stays
+    // ambiguous, exactly as before — checked before challenge classification.
     if (response.status === 429) return { kind: "rate-limited" };
     if (response.status >= 500) return { kind: "ambiguous" };
+    const challenge = antiBotChallengeKind(
+      response.status,
+      response.headers ?? {},
+      response.bodyText,
+    );
+    if (challenge === "cloudflare-captcha") return { kind: "captcha" };
+    if (challenge === "direct-recoverable") return { kind: "challenge" };
     try {
       return {
         kind: "ok",
@@ -477,7 +498,7 @@ function classifyGraphResponse(
   body: string,
   operation: string,
 ): void {
-  if (isAntiBotChallenge(status, headers, body)) {
+  if (antiBotChallengeKind(status, headers, body) !== null) {
     throw new AmcChallengeError("AMC GraphQL returned an anti-bot challenge");
   }
   if (status === 401)
@@ -512,29 +533,35 @@ function headerValue(
   return undefined;
 }
 
+export type AntiBotChallengeKind = "direct-recoverable" | "cloudflare-captcha";
+
 /**
- * A positively identified anti-bot challenge (not a generic origin rejection).
- * True when the older body markers match, OR when a 403/429 HTML response is
- * Cloudflare-fronted (server=cloudflare or a cf-ray/cf-mitigated header) AND
- * carries a bounded Cloudflare CAPTCHA/challenge body marker. A bare
- * `server: cloudflare` is never sufficient on its own.
+ * Positively identify an anti-bot challenge and its KIND (null when it is a
+ * generic origin rejection, not a challenge):
+ *  - `direct-recoverable`: the older Queue-it / Cloudflare interstitial body
+ *    markers — cleared by one bounded direct re-admission + one redispatch.
+ *  - `cloudflare-captcha`: a 403/429 HTML response that is Cloudflare-fronted
+ *    (server=cloudflare or a cf-ray/cf-mitigated header) AND carries a bounded
+ *    Cloudflare CAPTCHA/challenge body marker. A bare `server: cloudflare` is
+ *    never sufficient. This interactive CAPTCHA cannot be cleared by immediate
+ *    re-admission, so writes trip the cooldown circuit breaker instead.
  */
-function isAntiBotChallenge(
+export function antiBotChallengeKind(
   status: number,
   headers: Record<string, string>,
   body: string,
-): boolean {
-  if (status !== 403 && status !== 429) return false;
-  if (LEGACY_CHALLENGE_BODY.test(body)) return true;
+): AntiBotChallengeKind | null {
+  if (status !== 403 && status !== 429) return null;
+  if (LEGACY_CHALLENGE_BODY.test(body)) return "direct-recoverable";
   const contentType = (
     headerValue(headers, "content-type") ?? ""
   ).toLowerCase();
-  if (!contentType.includes("text/html")) return false;
+  if (!contentType.includes("text/html")) return null;
   const server = (headerValue(headers, "server") ?? "").toLowerCase();
   const cloudflareFronted =
     server.includes("cloudflare") ||
     headerValue(headers, "cf-ray") !== undefined ||
     headerValue(headers, "cf-mitigated") !== undefined;
-  if (!cloudflareFronted) return false;
-  return CLOUDFLARE_CHALLENGE_BODY.test(body);
+  if (!cloudflareFronted) return null;
+  return CLOUDFLARE_CHALLENGE_BODY.test(body) ? "cloudflare-captcha" : null;
 }
