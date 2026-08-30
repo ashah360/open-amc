@@ -11,7 +11,12 @@ import {
   clearAmcSession,
 } from "../src/client/runtime";
 import { AmcSession, encodeAmcSession } from "../src/client/session";
-import { buildAmcCheckoutService } from "../src/commerce/wiring";
+import {
+  buildAmcCheckoutService,
+  createFileCheckoutRecovery,
+} from "../src/commerce/wiring";
+import { PendingWriteStore } from "../src/commerce/pending-write-store";
+import { selectionHash } from "../src/commerce/intent-identity";
 import {
   AmcCommerceProjectionProvider,
   AmcGraphqlCommerceExecutor,
@@ -72,7 +77,10 @@ function runtimeOn(
   store: SessionStore,
   script: Scripted[],
   clock: Clock,
-  options: { sessionRefresher?: { refresh: () => Promise<AmcSession> } } = {},
+  options: {
+    sessionRefresher?: { refresh: () => Promise<AmcSession> };
+    cooldownMs?: number;
+  } = {},
 ) {
   const transport = new ScriptedTransport(script);
   const runtime = new AmcRuntime({
@@ -81,7 +89,7 @@ function runtimeOn(
     readMode: "graphql",
     listingUrl: CENTURY_CITY,
     now: () => clock.t,
-    writeChallengeCooldownMs: COOLDOWN_MS,
+    writeChallengeCooldownMs: options.cooldownMs ?? COOLDOWN_MS,
     ...(options.sessionRefresher
       ? { sessionRefresher: options.sessionRefresher }
       : {}),
@@ -92,6 +100,9 @@ function runtimeOn(
     store,
     runtime,
     projections: projection,
+    now: () => clock.t,
+    // Durable file-backed recovery so cart markers are cross-process real.
+    capabilities: { recovery: createFileCheckoutRecovery(store) },
   });
   const executor = new AmcGraphqlCommerceExecutor(
     new ScopedAmcGraphqlClient(transport, runtime),
@@ -235,6 +246,34 @@ describe("write-challenge cooldown circuit breaker", () => {
     await clearAmcSession(store);
     expect(await store.load(AMC_SESSION_KEY)).toBeNull();
     expect(await store.load(COOLDOWN_KEY)).toBeNull();
+  });
+
+  it("Proof 7: a service-level CAPTCHA clears the tokenless cart marker, so a fresh service dispatches after expiry instead of hitting stale ambiguity", async () => {
+    const store = await newStore();
+    const clock: Clock = { t: new Date("2030-01-15T08:00:00.000Z") };
+    // 5m cooldown < 30m CART_HOLD_TTL: a stale marker at the probe time would
+    // still block with AMC_WRITE_OUTCOME_UNKNOWN, so this cannot pass vacuously.
+    const first = runtimeOn(
+      store,
+      [canaryOk(), cloudflareCaptcha403()],
+      clock,
+      {
+        cooldownMs: 5 * 60_000,
+      },
+    );
+    const error = await first.service.createCart(intent()).catch((e) => e);
+    expect(error).toBeInstanceOf(WriteChallengeCooldownError);
+    // The definite rejection cleared the tokenless cart marker immediately.
+    const selKey = selectionHash("900000006", ["E9"]);
+    expect(await new PendingWriteStore(store).load("cart", selKey)).toBeNull();
+
+    // At expiry a genuinely fresh service/runtime dispatches exactly one cart
+    // mutation (blocked neither by the cooldown nor by marker ambiguity).
+    clock.t = new Date("2030-01-15T08:05:00.000Z");
+    const second = runtimeOn(store, [canaryOk(), cartCreateOk()], clock);
+    const cart = await second.service.createCart(intent());
+    expect(cart.orderToken).toBe(ORDER_TOKEN);
+    expect(cartMutations(second.transport)).toBe(1);
   });
 
   it("fails closed (session-corrupt family) on a tampered cooldown record", async () => {

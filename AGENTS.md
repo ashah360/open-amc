@@ -44,7 +44,7 @@ amc doctor --json
   redispatched once in the same session (persistent → typed
   `AMC_WRITE_RATE_LIMITED`), and a COMPLETE anti-bot challenge (the edge
   rejected the request before the mutation ran) triggers exactly one bounded
-  **  direct** session re-admission — never a browser — then one redispatch
+  **direct** session re-admission — never a browser — then one redispatch
   (persistent → typed `AMC_WRITE_CHALLENGED`; if re-admission needs a browser
   it stops with `AMC_SESSION_REPAIR_REQUIRED`). A **Cloudflare CAPTCHA** write
   response is different: it is an interactive human boundary that immediate
