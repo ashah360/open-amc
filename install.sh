@@ -7,7 +7,7 @@
 #
 # Environment overrides (production defaults pin the release; never mutable main):
 #   OPEN_AMC_REPOSITORY  Git URL           (default https://github.com/ashah360/open-amc.git)
-#   OPEN_AMC_REF         tag or branch     (default v0.1.2)
+#   OPEN_AMC_REF         tag or branch     (default v0.1.3)
 #   OPEN_AMC_HOME        install checkout  (default $HOME/.open-amc/app)
 #   BIN_DIR              CLI symlink dir   (default $HOME/.local/bin)
 #   OPEN_AMC_SKILL_URL   Hermes SKILL URL  (default raw GitHub SKILL.md at OPEN_AMC_REF)
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 OPEN_AMC_REPOSITORY="${OPEN_AMC_REPOSITORY:-https://github.com/ashah360/open-amc.git}"
-OPEN_AMC_REF="${OPEN_AMC_REF:-v0.1.2}"
+OPEN_AMC_REF="${OPEN_AMC_REF:-v0.1.3}"
 OPEN_AMC_HOME="${OPEN_AMC_HOME:-$HOME/.open-amc/app}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 OPEN_AMC_SKILL_URL="${OPEN_AMC_SKILL_URL:-https://raw.githubusercontent.com/ashah360/open-amc/${OPEN_AMC_REF}/SKILL.md}"

@@ -24,7 +24,7 @@ never zero-config).
 **A. Paste the repo URL with a prompt.** Your agent clones, installs, and reads
 the root `AGENTS.md`/`SKILL.md`:
 
-> Install https://github.com/ashah360/open-amc.git (tag v0.1.2, run
+> Install https://github.com/ashah360/open-amc.git (tag v0.1.3, run
 > `bash install.sh --agent auto`), then run
 > `amc setup --theater-url "<official AMC theater URL>" --json`. After setup,
 > find showtimes and hold my seats, then give me the checkout URL privately.
@@ -32,17 +32,17 @@ the root `AGENTS.md`/`SKILL.md`:
 **B. One installer (Hermes and OpenClaw).** Auditable clone-then-run:
 
 ```bash
-git clone --branch v0.1.2 --depth 1 https://github.com/ashah360/open-amc.git
+git clone --branch v0.1.3 --depth 1 https://github.com/ashah360/open-amc.git
 bash open-amc/install.sh --agent hermes   # or: --agent openclaw | auto
 ```
 
 or, as a convenience one-liner:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ashah360/open-amc/v0.1.2/install.sh | bash -s -- --agent hermes
+curl -fsSL https://raw.githubusercontent.com/ashah360/open-amc/v0.1.3/install.sh | bash -s -- --agent hermes
 ```
 
-It pins v0.1.2 into `~/.open-amc/app` (override `OPEN_AMC_HOME`), links
+It pins v0.1.3 into `~/.open-amc/app` (override `OPEN_AMC_HOME`), links
 `~/.local/bin/amc` (override `BIN_DIR`), verifies `amc doctor --json`, and
 installs the skill through the platform's native mechanism (Hermes: pinned raw
 `SKILL.md` URL, noninteractive with `--yes` — start a new Hermes session
@@ -53,7 +53,7 @@ safely updates the same install.
 Installing the skill manually later:
 
 ```bash
-hermes skills install https://raw.githubusercontent.com/ashah360/open-amc/v0.1.2/SKILL.md --yes   # then start a new Hermes session
+hermes skills install https://raw.githubusercontent.com/ashah360/open-amc/v0.1.3/SKILL.md --yes   # then start a new Hermes session
 openclaw skills install <path-to-open-amc-checkout> --global --as open-amc
 ```
 
@@ -263,6 +263,16 @@ that also covers browser acquisition.
 The built-in Aside adapters under `@ashah360/open-amc/capabilities/browser`
 remain available as compatibility aliases; new integrations should prefer the
 portable Playwright adapter.
+
+### Read reliability vs. write safety
+
+Ordinary reads and the auth canary each perform **exactly one** bounded,
+same-session retry past a transient direct-egress hiccup (an HTTP 429/5xx, a
+200 whose body is an interstitial, or a TLS/socket error such as `EPROTO`),
+which self-heals in practice. This is not a generic retry loop: it is single,
+transient-classified, same-session, and never launches a browser. Consequential
+**writes** (cart creation, checkout fulfillment, refunds) are unaffected — they
+remain single-dispatch and fail closed.
 
 ### Ambiguous writes and reconciliation
 

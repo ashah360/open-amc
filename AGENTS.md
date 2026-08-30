@@ -11,7 +11,7 @@ respect provider limits, and never blind-retry writes.
 ## Install (public Git; pinned installer preferred)
 
 ```bash
-git clone --branch v0.1.2 --depth 1 https://github.com/ashah360/open-amc.git
+git clone --branch v0.1.3 --depth 1 https://github.com/ashah360/open-amc.git
 bash open-amc/install.sh --agent auto   # installs ~/.local/bin/amc + the skill
 ```
 
