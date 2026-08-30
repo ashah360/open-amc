@@ -116,6 +116,7 @@ export interface LegacyCheckoutAttempt {
   intent: CartCreateIntent;
   state: string;
   updatedAt: string;
+  checkoutSessionId?: string;
 }
 
 /**
@@ -153,7 +154,9 @@ export async function readLegacyAttemptByToken(
     legacy.version !== 1 ||
     legacy.orderToken !== orderToken ||
     typeof legacy.state !== "string" ||
-    !isIso(legacy.updatedAt)
+    !isIso(legacy.updatedAt) ||
+    (legacy.checkoutSessionId !== undefined &&
+      !validCheckoutSessionId(legacy.checkoutSessionId))
   ) {
     throw new RecoveryStoreCorruptError();
   }
@@ -162,13 +165,15 @@ export async function readLegacyAttemptByToken(
     intent: legacy.intent as CartCreateIntent,
     state: legacy.state,
     updatedAt: legacy.updatedAt,
+    ...(legacy.checkoutSessionId
+      ? { checkoutSessionId: legacy.checkoutSessionId }
+      : {}),
   };
 }
 
 /**
  * Resolve the immutable intent for a token, lazily migrating a legacy record on
- * first access (read-only). RELEASED carries no identity; a mid-dispatch legacy
- * state seeds the matching uncertainty marker for the provider to resolve.
+ * first access (read-only); a mid-dispatch legacy state seeds its marker.
  */
 export async function migrateLegacyIntent(
   rec: {
@@ -186,6 +191,9 @@ export async function migrateLegacyIntent(
   await rec.intents.record({
     orderToken: legacy.orderToken,
     intent: legacy.intent,
+    ...(legacy.checkoutSessionId
+      ? { checkoutSessionId: legacy.checkoutSessionId }
+      : {}),
     createdAt: legacy.updatedAt,
   });
   const marker =

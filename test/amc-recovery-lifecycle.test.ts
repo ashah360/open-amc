@@ -6,9 +6,14 @@ import { FileSessionStore } from "../src/auth-session";
 import {
   AmcCommerceService,
   CheckoutRecovery,
+  CheckoutSessionOwnershipError,
   CheckoutSettlingError,
+  ReleaseOutcomeUnknownError,
 } from "../src/commerce/service";
-import { CartIntentStore } from "../src/commerce/cart-intent-store";
+import {
+  CartIntentStore,
+  RecoveryStoreCorruptError,
+} from "../src/commerce/cart-intent-store";
 import { PendingWriteStore } from "../src/commerce/pending-write-store";
 import { sha256 } from "../src/commerce/intent-identity";
 import { AmcCommerceProjectionProvider } from "../src/commerce/graphql-executor";
@@ -171,10 +176,14 @@ function serviceWith(store: FileSessionStore) {
   return { service, executor, projections, payment };
 }
 
-/** Seed a legacy journal PURCHASE_DISPATCHING record (A9 shape) for TOKEN. */
-async function seedLegacyPurchaseDispatching(
+/** Seed a legacy journal record for TOKEN (A9 shape by default). */
+async function seedLegacy(
   store: FileSessionStore,
-  updatedAt: string,
+  opts: {
+    state?: string;
+    updatedAt: string;
+    checkoutSessionId?: string;
+  },
 ): Promise<void> {
   const attemptId = "a".repeat(64);
   await store.save(
@@ -187,14 +196,24 @@ async function seedLegacyPurchaseDispatching(
       JSON.stringify({
         version: 1,
         attemptId,
-        state: "PURCHASE_DISPATCHING",
+        state: opts.state ?? "PURCHASE_DISPATCHING",
         intent: intent(),
         orderToken: TOKEN,
-        updatedAt,
+        updatedAt: opts.updatedAt,
+        ...(opts.checkoutSessionId
+          ? { checkoutSessionId: opts.checkoutSessionId }
+          : {}),
       }),
       "utf8",
     ),
   );
+}
+
+async function seedLegacyPurchaseDispatching(
+  store: FileSessionStore,
+  updatedAt: string,
+): Promise<void> {
+  await seedLegacy(store, { updatedAt });
 }
 
 describe("provider-authoritative recovery lifecycle", () => {
@@ -273,5 +292,78 @@ describe("provider-authoritative recovery lifecycle", () => {
     const second = await service.createCart(intent());
     expect(second.orderToken).toBe(TOKEN);
     expect(executor.createCalls).toBe(1);
+  });
+
+  it("F2: migrates the legacy checkoutSessionId so the rightful owner succeeds and others are rejected", async () => {
+    const store = await newStore();
+    await seedLegacy(store, {
+      state: "CART_OPEN",
+      updatedAt: "2030-01-15T08:00:00.000Z",
+      checkoutSessionId: "conversation-a",
+    });
+    const { service } = serviceWith(store);
+
+    // A different session is rejected exactly as v0.1.4 did.
+    await expect(
+      service.reconcileCheckoutByToken(
+        TOKEN,
+        "guest@example.test",
+        "conversation-b",
+      ),
+    ).rejects.toBeInstanceOf(CheckoutSessionOwnershipError);
+    // The rightful owner succeeds after migration (provider says open -> null).
+    await expect(
+      service.reconcileCheckoutByToken(
+        TOKEN,
+        "guest@example.test",
+        "conversation-a",
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it("F2: a tampered legacy checkoutSessionId fails closed as corrupt", async () => {
+    const store = await newStore();
+    await seedLegacy(store, {
+      state: "CART_OPEN",
+      updatedAt: "2030-01-15T08:00:00.000Z",
+      checkoutSessionId: "bad owner!",
+    });
+    const { service } = serviceWith(store);
+    await expect(
+      service.reconcileCheckoutByToken(
+        TOKEN,
+        "guest@example.test",
+        "conversation-a",
+      ),
+    ).rejects.toBeInstanceOf(RecoveryStoreCorruptError);
+  });
+
+  it("F3: reconciles an unknown token via the read-only projection, without the payment capability", async () => {
+    const store = await newStore();
+    const { service, projections, payment } = serviceWith(store);
+    // Prove the payment capability (card path) is NOT consulted.
+    payment.reconcilePurchase = () => {
+      throw new Error("payment capability must not be used for reconcile");
+    };
+    projections.reconcilePurchase = () => Promise.resolve(null);
+
+    await expect(
+      service.reconcileCheckoutByToken(TOKEN, "guest@example.test"),
+    ).resolves.toBeNull();
+  });
+
+  it("does not redispatch OrderDelete when a prior release is still unresolved", async () => {
+    const store = await newStore();
+    // Legacy RELEASE_DISPATCHING seeds a release marker; provider still open.
+    await seedLegacy(store, {
+      state: "RELEASE_DISPATCHING",
+      updatedAt: "2030-01-15T08:00:00.000Z",
+    });
+    const { service, executor } = serviceWith(store);
+
+    await expect(service.releaseCart(TOKEN)).rejects.toBeInstanceOf(
+      ReleaseOutcomeUnknownError,
+    );
+    expect(executor.deleteCalls).toBe(0);
   });
 });

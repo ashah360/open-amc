@@ -50,8 +50,7 @@ import {
   verifyRefundPostcondition,
 } from "./checkout-preview";
 
-// "Not purchased" is only declared after this window with the order still
-// Pending+unpaid (edge settle lag).
+// "Not purchased" is declared only after this settle window (Pending+unpaid).
 export const PURCHASE_QUIET_WINDOW_MS = 60_000;
 
 // A tokenless cart hold blocks a duplicate for the same seats this long.
@@ -276,6 +275,20 @@ export class AmcCommerceService {
     const selKey = selectionHash(intent.showtimeId, seatNames);
     return this.singleFlight(`cart:${cartIntentBinding(intent)}`, () =>
       this.recoveryLock(`cart:${selKey}`, async () => {
+        // A fresh tokenless cart marker blocks a duplicate regardless of any
+        // prior alias — checked FIRST so it is never overwritten.
+        const marker = await rec.pending.load("cart", selKey);
+        if (marker) {
+          if (
+            this.now().getTime() - Date.parse(marker.dispatchedAt) <
+            CART_HOLD_TTL_MS
+          ) {
+            throw new UnknownWriteOutcomeError(
+              "a prior cart dispatch for these seats is still unresolved; not creating a duplicate",
+            );
+          }
+          await rec.pending.clear("cart", selKey);
+        }
         // A prior cart for this exact selection: let provider truth decide.
         const priorToken = await rec.intents.newestTokenForSelection(
           intent.showtimeId,
@@ -298,18 +311,6 @@ export class AmcCommerceService {
             );
           }
           // closed-unpaid: the hold is gone; a new cart is allowed.
-        } else {
-          const marker = await rec.pending.load("cart", selKey);
-          if (
-            marker &&
-            this.now().getTime() - Date.parse(marker.dispatchedAt) <
-              CART_HOLD_TTL_MS
-          ) {
-            throw new UnknownWriteOutcomeError(
-              "a prior cart dispatch for these seats is still unresolved; not creating a duplicate",
-            );
-          }
-          if (marker) await rec.pending.clear("cart", selKey);
         }
         await rec.pending.mark({
           operation: "cart",
@@ -440,8 +441,9 @@ export class AmcCommerceService {
     return this.recoveryLock(`checkout:${orderToken}`, async () => {
       const record = await this.loadIntentRecord(orderToken);
       if (!record) {
-        // No durable intent for this token: a safe read-only provider check.
-        const observed = await this.options.payment.reconcilePurchase(
+        // No durable intent: a read-only PROJECTION check (not the payment
+        // capability), so a no-card CLI can reconcile an external token.
+        const observed = await this.options.projections.reconcilePurchase(
           orderToken,
           email,
         );
@@ -477,16 +479,29 @@ export class AmcCommerceService {
       assertCheckoutSessionOwner(record, checkoutSessionId);
       const res = await this.resolveLifecycle(orderToken, record);
       if (res.kind === "purchased") {
+        await this.recovery.pending.clear("release", orderToken);
         throw new ConsequenceMismatchError(
           "cart was purchased and cannot be released",
         );
       }
-      if (res.kind === "closed-unpaid") return { released: true as const };
+      if (res.kind === "closed-unpaid") {
+        // Provider proves the order is gone: any prior release is resolved.
+        await this.recovery.pending.clear("release", orderToken);
+        return { released: true as const };
+      }
       if (res.kind === "settling")
         throw new CheckoutSettlingError({ orderToken });
       if (res.kind === "blocked") {
         throw new UnknownWriteOutcomeError(
           "AMC cart state is unresolved; release will not be dispatched",
+        );
+      }
+      // open + a prior release marker: the earlier OrderDelete is unresolved —
+      // do not redispatch a consequential write.
+      if (await this.recovery.pending.load("release", orderToken)) {
+        throw new ReleaseOutcomeUnknownError(
+          "OrderDelete outcome remains unknown; release will not be redispatched",
+          { orderToken },
         );
       }
       // open: dispatch OrderDelete exactly once behind a release marker.

@@ -79,17 +79,9 @@ export interface CommerceExecutor {
   ): Promise<CartSnapshot>;
   /** Consequential OrderDelete mutation. Implementations must dispatch at most once. */
   deleteCart(orderToken: string): Promise<void>;
-  /**
-   * Read-only authoritative check of whether an order is already released
-   * (cancelled/expired). Used to reconcile an ambiguous OrderDelete without
-   * redispatching. Returns false when the order is still open or fulfilled.
-   */
+  /** Read-only check that an order is already released (cancelled/expired); false if open/fulfilled. */
   reconcileRelease(orderToken: string): Promise<boolean>;
-  /**
-   * Extend an open order's expiration (OrderExpirationUpdate). Monotonic and
-   * self-reconciling: implementations dispatch at most once and, on an ambiguous
-   * transport failure, re-read the current expiry rather than redispatching.
-   */
+  /** Extend expiration (OrderExpirationUpdate): dispatch once, re-read expiry on ambiguity. */
   extendOrderExpiration(orderToken: string): Promise<{ expiresAt: string }>;
   /** Browser-backed OrderSearch plus refund consequence projection. */
   searchOrder(orderNumber: string, email: string): Promise<RefundOrderSnapshot>;
@@ -130,10 +122,7 @@ export interface PurchaseResult {
 }
 
 export interface PaymentExecutor {
-  /**
-   * One secure-fill browser transaction. Card fields remain in hosted frames;
-   * only an in-memory opaque handle crosses this interface.
-   */
+  /** Secure-fill transaction; card fields stay in hosted frames, only an opaque handle crosses. */
   secureFill(input: {
     orderToken: string;
     vaultPointer: string;
@@ -145,10 +134,7 @@ export interface PaymentExecutor {
     payment: EphemeralPaymentHandle;
   }): Promise<EphemeralCardHandle>;
 
-  /**
-   * A separate Purchase browser transaction. Nonce/deviceData never cross this
-   * boundary and the method returns only the typed confirmation projection.
-   */
+  /** Purchase transaction; nonce/deviceData never cross, returns the typed confirmation. */
   purchase(input: {
     orderToken: string;
     email: string;
@@ -174,12 +160,8 @@ export class AmbiguousWriteError extends Error {
 }
 
 /**
- * The provider/edge answered a write with a COMPLETE HTTP 429 response twice
- * in a row (original dispatch plus the single immediate same-session retry).
- * A complete 429 is an explicit rejection — the write was not executed — so
- * this is a definite typed failure, never an unknown outcome: no
- * reconciliation is required and the caller may safely run the same command
- * again later.
+ * A COMPLETE HTTP 429 on a write, twice (dispatch + one same-session retry): an
+ * explicit rejection (not executed), so a definite typed failure, safe to rerun.
  */
 export class WriteRateLimitedError extends Error {
   readonly code = "AMC_WRITE_RATE_LIMITED";
@@ -194,14 +176,9 @@ export class WriteRateLimitedError extends Error {
 }
 
 /**
- * The anti-bot edge rejected a write with a COMPLETE HTTP challenge response
- * (e.g. a Cloudflare 403 positively matched by the challenge markers) — which
- * means the edge blocked the request BEFORE it reached the origin mutation
- * resolver, so no mutation occurred — both on the original dispatch and again
- * after a single bounded direct session re-admission. This is a definite
- * rejection, never an unknown outcome: no reconciliation is required. If it
- * persists, an explicit `amc auth repair` (which may launch a browser) is the
- * next step; the automatic path never launches one.
+ * A COMPLETE anti-bot challenge on a write, twice (dispatch + one bounded direct
+ * re-admission): the edge blocked it before the origin mutation, so a definite
+ * rejection (nothing executed). Persisting needs an explicit `amc auth repair`.
  */
 export class WriteChallengedError extends Error {
   readonly code = "AMC_WRITE_CHALLENGED";

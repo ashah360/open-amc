@@ -496,6 +496,40 @@ describe("AMC consequential commerce lifecycle", () => {
     expect(executor.reconcileCartCalls).toBe(1);
   });
 
+  it("F1: a fresh tokenless cart marker blocks a duplicate even when the prior selection alias is closed-unpaid", async () => {
+    const executor = new FakeCommerceExecutor();
+    const projections = new FakeProjectionProvider();
+    const service = new AmcCommerceService({
+      executor,
+      projections,
+      payment: new FakePaymentExecutor(),
+      now: () => new Date("2030-01-15T08:30:00.000Z"),
+    });
+
+    // 1) Create the cart: records the intent + selection alias (token T1).
+    await service.createCart(createIntent());
+    expect(executor.createCalls).toBe(1);
+
+    // 2) The provider now reports that prior hold as closed-unpaid.
+    projections.lifecycle = { kind: "closed-unpaid" };
+
+    // 3) A second dispatch is ambiguous with no token, leaving a cart marker.
+    executor.createError = new AmbiguousWriteError("cart");
+    executor.reconciledCart = null;
+    await expect(service.createCart(createIntent())).rejects.toBeInstanceOf(
+      UnknownWriteOutcomeError,
+    );
+    expect(executor.createCalls).toBe(2);
+
+    // 4) A later create must be BLOCKED by the still-fresh marker — it must NOT
+    //    follow the closed-unpaid alias and redispatch a duplicate.
+    executor.createError = null;
+    await expect(service.createCart(createIntent())).rejects.toBeInstanceOf(
+      UnknownWriteOutcomeError,
+    );
+    expect(executor.createCalls).toBe(2);
+  });
+
   it("never retries CartCreateOrder after an ambiguous outcome", async () => {
     const executor = new FakeCommerceExecutor();
     executor.createError = new AmbiguousWriteError("cart");
