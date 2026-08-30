@@ -159,6 +159,26 @@ export class AmbiguousWriteError extends Error {
   }
 }
 
+/**
+ * The provider/edge answered a write with a COMPLETE HTTP 429 response twice
+ * in a row (original dispatch plus the single immediate same-session retry).
+ * A complete 429 is an explicit rejection — the write was not executed — so
+ * this is a definite typed failure, never an unknown outcome: no
+ * reconciliation is required and the caller may safely run the same command
+ * again later.
+ */
+export class WriteRateLimitedError extends Error {
+  readonly code = "AMC_WRITE_RATE_LIMITED";
+  constructor(
+    readonly operation:
+      "cart" | "purchase" | "refund" | "release" | "expiration",
+  ) {
+    super(
+      `AMC ${operation} request was rate limited (HTTP 429) on both the original dispatch and its single immediate retry; the write was rejected, not executed — wait briefly and run the same command again`,
+    );
+  }
+}
+
 export class PaymentSecurityChallengeError extends Error {
   readonly code = "AMC_PAYMENT_SECURITY_CHALLENGE";
   constructor(readonly challengeContext?: { readonly opaque: symbol }) {

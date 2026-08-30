@@ -37,6 +37,7 @@ import {
   Money,
   PurchaseResult,
   RefundOrderSnapshot,
+  WriteRateLimitedError,
 } from "./executor";
 import {
   BraintreeClientTokenProvider,
@@ -143,9 +144,22 @@ export class ScopedAmcGraphqlClient {
   ): Promise<unknown> {
     return this.runtime.withAuthenticatedWrite(async (context) => {
       try {
-        return await this.dispatch(context, envelope, true);
+        let response = await this.dispatchRaw(context, envelope, true);
+        if (response.status === 429) {
+          // A COMPLETE HTTP 429 response is the provider/edge explicitly
+          // rejecting the request — the write was not executed — so exactly
+          // one immediate same-session redispatch is safe. A transport throw
+          // (no complete response) never reaches this branch and stays
+          // ambiguous below with zero retry.
+          response = await this.dispatchRaw(context, envelope, true);
+          if (response.status === 429) {
+            throw new WriteRateLimitedError(operation);
+          }
+        }
+        return this.parseGraphResponse(response, envelope.operationName);
       } catch (error) {
         if (error instanceof AmcGraphqlContractError) throw error;
+        if (error instanceof WriteRateLimitedError) throw error;
         throw new AmbiguousWriteError(operation);
       }
     });
@@ -156,6 +170,15 @@ export class ScopedAmcGraphqlClient {
     envelope: GraphqlEnvelope<unknown> | GraphqlEnvelopeWithoutVariables,
     write: boolean,
   ): Promise<unknown> {
+    const response = await this.dispatchRaw(context, envelope, write);
+    return this.parseGraphResponse(response, envelope.operationName);
+  }
+
+  private async dispatchRaw(
+    context: AmcSessionContext,
+    envelope: GraphqlEnvelope<unknown> | GraphqlEnvelopeWithoutVariables,
+    write: boolean,
+  ): Promise<{ status: number; bodyText: string }> {
     const cookie = cookieHeaderFor(context.session, GRAPHQL_URL);
     if (!cookie) throw new AmcGraphqlContractError(envelope.operationName);
     const response = await this.transport.request({
@@ -174,15 +197,18 @@ export class ScopedAmcGraphqlClient {
       timeoutMs: write ? 60_000 : 45_000,
     });
     await context.persistSetCookies(GRAPHQL_URL, response.setCookies);
-    classifyGraphResponse(
-      response.status,
-      response.bodyText,
-      envelope.operationName,
-    );
+    return response;
+  }
+
+  private parseGraphResponse(
+    response: { status: number; bodyText: string },
+    operationName: string,
+  ): unknown {
+    classifyGraphResponse(response.status, response.bodyText, operationName);
     try {
       return JSON.parse(response.bodyText);
     } catch {
-      throw new AmcGraphqlContractError(envelope.operationName);
+      throw new AmcGraphqlContractError(operationName);
     }
   }
 }

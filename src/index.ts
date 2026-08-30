@@ -67,6 +67,7 @@ export {
   AmbiguousWriteError,
   AmcCapabilityUnavailableError,
   PurchaseNotCompletedError,
+  WriteRateLimitedError,
 } from "./commerce/executor";
 export type {
   AmcCommerceService,

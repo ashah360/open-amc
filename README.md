@@ -271,8 +271,13 @@ same-session retry past a transient direct-egress hiccup (an HTTP 429/5xx, a
 200 whose body is an interstitial, or a TLS/socket error such as `EPROTO`),
 which self-heals in practice. This is not a generic retry loop: it is single,
 transient-classified, same-session, and never launches a browser. Consequential
-**writes** (cart creation, checkout fulfillment, refunds) are unaffected — they
-remain single-dispatch and fail closed.
+**writes** (cart creation, checkout fulfillment, refunds) remain fail-closed
+with one narrow exception: when a write receives a COMPLETE HTTP 429 response
+(an explicit rate-limit rejection — the write was not executed), it is
+redispatched exactly once in the same session; a second 429 surfaces as the
+typed `AMC_WRITE_RATE_LIMITED`, a definite failure that is safe to rerun later.
+A transport error with no complete response is never retried and remains
+`AMC_WRITE_OUTCOME_UNKNOWN` (reconcile-only).
 
 ### Cross-process admission context
 

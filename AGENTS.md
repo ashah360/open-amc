@@ -37,7 +37,11 @@ amc doctor --json
   unexpired cart.
 - **Never retry a failed write blindly.** On `AMC_WRITE_OUTCOME_UNKNOWN`, run
   the matching `reconcile` command; the JSON error carries the safe
-  reconciliation identifiers (order token, order number, seats).
+  reconciliation identifiers (order token, order number, seats). One built-in
+  exception needs no action from you: a write answered by a COMPLETE HTTP 429
+  (an explicit rejection — nothing executed) is redispatched exactly once
+  internally; a persistent 429 surfaces as the typed `AMC_WRITE_RATE_LIMITED`,
+  which is a definite failure you may rerun later — not an unknown outcome.
 - **A cart hold is never stranded.** The CLI journals cart tokens privately by
   default (no config needed). If `cart create` fails after the provider issued a
   token, the error is `AMC_CART_HOLD_UNCONFIRMED` with
