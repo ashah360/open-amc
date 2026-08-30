@@ -4,6 +4,7 @@ import {
   FingerprintSanitizeError,
   sanitizePeetFingerprint,
 } from "./fingerprint";
+import { resolveOfficialAmcTheaterUrl } from "./theater-url";
 
 export const AMC_ORIGIN = "https://www.amctheatres.com";
 export const AMC_GRAPH_ORIGIN = "https://graph.amctheatres.com";
@@ -33,6 +34,17 @@ export interface AmcSession {
    * malformed/identifying value is dropped rather than trusted.
    */
   fingerprint?: AmcFingerprintProfile;
+  /**
+   * Optional last-validated canonical official AMC theater listing URL
+   * (`https://www.amctheatres.com/movie-theatres/<market>/<amc-...>/showtimes`).
+   * Persisted from a successful `amc setup`/browser repair or a successful
+   * `showtimes --theater-url`, so a later process (seats/cart/auth validation)
+   * can run bounded DIRECT admission against the caller's theater instead of
+   * demanding a fresh setup. Non-secret. Always re-validated on decode through
+   * the official-theater resolver; a malformed/lookalike value is dropped
+   * (never trusted), and a legacy session without it behaves exactly as before.
+   */
+  admissionListingUrl?: string;
 }
 
 const COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
@@ -67,6 +79,9 @@ export function decodeAmcSession(bytes: Uint8Array): AmcSession {
     decodeCookie(cookie, index),
   );
   const fingerprint = decodeFingerprint(value.fingerprint);
+  const admissionListingUrl = decodeAdmissionListingUrl(
+    value.admissionListingUrl,
+  );
   return {
     version: 1,
     origin: AMC_ORIGIN,
@@ -74,7 +89,37 @@ export function decodeAmcSession(bytes: Uint8Array): AmcSession {
     exportedAt: value.exportedAt,
     cookies,
     ...(fingerprint ? { fingerprint } : {}),
+    ...(admissionListingUrl ? { admissionListingUrl } : {}),
   };
+}
+
+/**
+ * Decode a persisted admission listing URL defensively: it is re-validated
+ * through the official-theater resolver and normalized to the canonical
+ * showtimes URL, so a tampered/lookalike/non-AMC value can never be used. A
+ * bad value is dropped (returns undefined), never failing the whole decode.
+ */
+function decodeAdmissionListingUrl(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  try {
+    return resolveOfficialAmcTheaterUrl(value).url;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Validate/normalize a candidate admission listing URL for persistence, or
+ * return undefined if it is not an official canonical AMC theater URL.
+ */
+export function canonicalAdmissionListingUrl(
+  value: string,
+): string | undefined {
+  try {
+    return resolveOfficialAmcTheaterUrl(value).url;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

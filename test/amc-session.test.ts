@@ -287,6 +287,42 @@ describe("AMC opaque browser session", () => {
     expect(tampered.fingerprint?.name).toBe(withFp.fingerprint!.name);
   });
 
+  it("round-trips a validated admission listing URL and normalizes it to canonical", () => {
+    const withUrl = decodeAmcSession(
+      encodeAmcSession({
+        ...session,
+        // A non-canonical but official URL (extra path/query) normalizes.
+        admissionListingUrl:
+          "https://amctheatres.com/movie-theatres/los-angeles/amc-century-city-15/showtimes?date=2030-01-15",
+      } as AmcSession),
+    );
+    expect(withUrl.admissionListingUrl).toBe(
+      "https://www.amctheatres.com/movie-theatres/los-angeles/amc-century-city-15/showtimes",
+    );
+  });
+
+  it("drops a malformed/lookalike admission listing URL instead of trusting it", () => {
+    for (const bad of [
+      "https://www.amctheatres.com.evil.example/movie-theatres/x/amc-y/showtimes",
+      "https://evil.example/movie-theatres/x/amc-y/showtimes",
+      "not a url",
+      "https://www.amctheatres.com/account/settings",
+    ]) {
+      const decoded = decodeAmcSession(
+        Buffer.from(JSON.stringify({ ...session, admissionListingUrl: bad })),
+      );
+      expect(decoded.admissionListingUrl).toBeUndefined();
+      // A bad hint never bricks the session.
+      expect(decoded.cookies.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("decodes a legacy session with no admission URL unchanged", () => {
+    const legacy = decodeAmcSession(encodeAmcSession(session));
+    expect(legacy.admissionListingUrl).toBeUndefined();
+    expect("admissionListingUrl" in legacy).toBe(false);
+  });
+
   it("drops a malformed persisted fingerprint instead of trusting it", () => {
     const decoded = decodeAmcSession(
       Buffer.from(

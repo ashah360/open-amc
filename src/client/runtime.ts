@@ -26,6 +26,7 @@ import {
   AMC_ORIGIN,
   AmcSession,
   applySetCookieLines,
+  canonicalAdmissionListingUrl,
   cookieHeaderFor,
   decodeAmcBootstrap,
   decodeAmcSession,
@@ -223,7 +224,7 @@ export class AmcRuntime {
         this.pendingValidationRotations,
         options.readMode === "graphql" ? "graphql" : "ssr",
         () => this.admissionListingPath(),
-        (session) => this.adoptFingerprint(session.fingerprint),
+        (session) => this.onSessionLoaded(session),
       ),
       this.store,
     );
@@ -231,9 +232,60 @@ export class AmcRuntime {
       transport: options.transport,
       store: this.store,
       repairSession: () => this.manager.forceRefresh(),
-      onSessionLoaded: (session) => this.adoptFingerprint(session.fingerprint),
+      onSessionLoaded: (session) => this.onSessionLoaded(session),
       ...(options.venues ? { venues: options.venues } : {}),
     });
+  }
+
+  /**
+   * Applied whenever a persisted session is loaded (graph reads and the auth
+   * canary): adopt its browser-derived fingerprint AND restore its last
+   * validated admission listing URL so a fresh process (seats/cart/auth
+   * validation) can run bounded direct admission against the caller's theater.
+   * The restore only fills an unset URL, so the current operation's own
+   * `rememberListing` (latest caller intent) always wins within a process.
+   */
+  private async onSessionLoaded(session: AmcSession): Promise<void> {
+    if (!this.admissionListingUrl && session.admissionListingUrl) {
+      this.admissionListingUrl = session.admissionListingUrl;
+    }
+    await this.adoptFingerprint(session.fingerprint);
+  }
+
+  /**
+   * Persist the current admission listing URL into the existing session record
+   * (locked read-modify-write) after a successful read/repair, preserving
+   * cookies and fingerprint. Only a canonical official theater URL is stored,
+   * and only onto a session that already exists — never creating one just to
+   * hold a hint, and never overwriting a valid session on a failed read.
+   */
+  private async persistAdmissionListingUrl(
+    url: string | null = this.admissionListingUrl,
+  ): Promise<void> {
+    if (!url) return;
+    const canonical = canonicalAdmissionListingUrl(url);
+    if (!canonical) return;
+    // Best-effort: persisting a non-secret admission hint must never fail an
+    // otherwise successful read/repair, nor corrupt the session.
+    try {
+      await this.store.withRefreshLock(AMC_SESSION_KEY, async () => {
+        const saved = await this.store.load(AMC_SESSION_KEY);
+        if (saved === null) return;
+        let current: AmcSession;
+        try {
+          current = decodeAmcSession(saved);
+        } catch {
+          return;
+        }
+        if (current.admissionListingUrl === canonical) return;
+        await this.store.save(
+          AMC_SESSION_KEY,
+          encodeAmcSession({ ...current, admissionListingUrl: canonical }),
+        );
+      });
+    } catch {
+      // Ignore: the read/repair already succeeded; the hint is optional.
+    }
   }
 
   /**
@@ -254,14 +306,22 @@ export class AmcRuntime {
     }
   }
 
-  getShowtimes(query: AmcShowtimeQuery): Promise<AmcShowtime[]> {
+  async getShowtimes(query: AmcShowtimeQuery): Promise<AmcShowtime[]> {
     // The caller's theater drives everything dynamic: remember its official
     // listing URL so direct admission for THIS read (and later reads in the
     // session) targets exactly that theater, never a built-in venue.
     this.rememberListing(query.venue);
-    if (this.options.readMode === "graphql")
-      return this.graphReads.getShowtimes(query);
-    return this.withRead((session) => this.client(session).getShowtimes(query));
+    const showtimes =
+      this.options.readMode === "graphql"
+        ? await this.graphReads.getShowtimes(query)
+        : await this.withRead((session) =>
+            this.client(session).getShowtimes(query),
+          );
+    // Only after a SUCCESSFUL read: persist this theater's canonical URL onto
+    // the session so seats/cart in a later process can re-admit directly. A
+    // failed read threw above, so the prior persisted URL is never replaced.
+    await this.persistAdmissionListingUrl();
+    return showtimes;
   }
 
   /** Learn the admission listing URL from a resolvable venue reference. */
@@ -346,6 +406,9 @@ export class AmcRuntime {
       ? new DirectFirstAmcSessionRefresher(direct, browser)
       : new DirectOnlySessionRefresher(direct);
     await this.runExplicitRepair(refresher);
+    // Persist the theater URL this repair validated so later processes
+    // (seats/cart) can re-admit directly for the same theater.
+    await this.persistAdmissionListingUrl(listingUrl);
   }
 
   /**
