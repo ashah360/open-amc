@@ -65,6 +65,7 @@ function makeSandbox(
       `  dest="\${@: -1}"`,
       `  mkdir -p "$dest/bin" "$dest/.git"`,
       `  printf '%s' '{"name":"@ashah360/open-amc","version":"0.1.4"}' > "$dest/package.json"`,
+      `  printf '%s' '{"name":"@ashah360/open-amc","lockfileVersion":3,"packages":{"node_modules/playwright-core":{"version":"1.62.1"}}}' > "$dest/package-lock.json"`,
       `  printf '%s\\n' '---' 'name: open-amc' '---' > "$dest/SKILL.md"`,
       `  {`,
       `    echo '#!/usr/bin/env bash'`,
@@ -76,7 +77,25 @@ function makeSandbox(
       `exit 0`,
     ].join("\n"),
   );
-  fake("npm", `echo "npm $*" >> "$FAKE_LOG_DIR/npm.log"\nexit 0`);
+  // Fake npm records argv and, like real npm, materializes playwright-core in
+  // the cwd module tree when asked to install it (FAKE_NPM_SKIP_PLAYWRIGHT=1
+  // models an npm that silently failed to deliver it).
+  fake(
+    "npm",
+    [
+      `echo "npm $*" >> "$FAKE_LOG_DIR/npm.log"`,
+      `case "$*" in`,
+      `  *playwright-core@*)`,
+      `    if [ "\${FAKE_NPM_SKIP_PLAYWRIGHT:-0}" != "1" ]; then`,
+      `      mkdir -p node_modules/playwright-core`,
+      `      printf '%s' '{"name":"playwright-core","version":"1.62.1","main":"index.js"}' > node_modules/playwright-core/package.json`,
+      `      printf '%s' 'module.exports = {};' > node_modules/playwright-core/index.js`,
+      `    fi`,
+      `    ;;`,
+      `esac`,
+      `exit 0`,
+    ].join("\n"),
+  );
   // Agent-platform fakes model the REAL contracts observed on this host:
   // `skills install` records argv and exits 0 even on a fetch failure, and
   // installation is proven independently by `skills list`. `hermes` supports
@@ -170,6 +189,17 @@ describe("install.sh", () => {
     );
     // Dependencies installed inside the checkout.
     expect(logOf(sandbox, "npm")).toContain("npm install --no-audit --no-fund");
+    // The exact lock-pinned playwright-core lands in the PRIVATE checkout
+    // (auth repair capability), never globally.
+    expect(logOf(sandbox, "npm")).toContain(
+      "npm install --no-audit --no-fund --no-save playwright-core@1.62.1",
+    );
+    expect(logOf(sandbox, "npm")).not.toMatch(/(^|\s)(-g|--global)(\s|$)/m);
+    expect(
+      existsSync(
+        path.join(installDir, "node_modules", "playwright-core", "index.js"),
+      ),
+    ).toBe(true);
     // CLI symlink points at the checkout's wrapper.
     const link = path.join(binDir, "amc");
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
@@ -301,6 +331,34 @@ describe("install.sh", () => {
     });
     expect(status).not.toBe(0);
     expect(output).toContain("did not register the open-amc skill");
+  });
+
+  it("fails with an actionable error when playwright-core cannot be resolved after install", () => {
+    const sandbox = makeSandbox();
+    const { status, output } = runInstaller(sandbox, ["--agent", "none"], {
+      FAKE_NPM_SKIP_PLAYWRIGHT: "1",
+    });
+    expect(status).not.toBe(0);
+    expect(output).toContain("playwright-core");
+    expect(output).toContain("auth repair");
+  });
+
+  it("verifies playwright-core resolution from the checkout module tree on idempotent reruns", () => {
+    const sandbox = makeSandbox();
+    const installDir = path.join(sandbox.home, ".open-amc", "app");
+    expect(
+      runInstaller(sandbox, ["--agent", "none"], { OPEN_AMC_HOME: installDir })
+        .status,
+    ).toBe(0);
+    expect(
+      runInstaller(sandbox, ["--agent", "none"], { OPEN_AMC_HOME: installDir })
+        .status,
+    ).toBe(0);
+    // Both runs installed the exact pin into the same private checkout.
+    const pinned = logOf(sandbox, "npm").match(
+      /--no-save playwright-core@1\.62\.1/g,
+    );
+    expect(pinned).toHaveLength(2);
   });
 
   it("fails (does not claim success) when doctor verification fails", () => {

@@ -42,7 +42,10 @@ or, as a convenience one-liner:
 curl -fsSL https://raw.githubusercontent.com/ashah360/open-amc/v0.1.4/install.sh | bash -s -- --agent hermes
 ```
 
-It pins v0.1.4 into `~/.open-amc/app` (override `OPEN_AMC_HOME`), links
+It pins v0.1.4 into `~/.open-amc/app` (override `OPEN_AMC_HOME`), installs the
+exact lock-pinned `playwright-core` into that private checkout so `amc setup` /
+`amc auth repair --listing-url ...` work out of the box (no browser download; an
+installed Chrome/Chromium remains the prerequisite; nothing global), links
 `~/.local/bin/amc` (override `BIN_DIR`), verifies `amc doctor --json`, and
 installs the skill through the platform's native mechanism (Hermes: pinned raw
 `SKILL.md` URL, noninteractive with `--yes` — start a new Hermes session
@@ -81,6 +84,19 @@ npm install
 `npm install` builds the CLI automatically. Node 22+ is required. The default transport uses the public
 [`@unreleased/hellojs`](https://www.npmjs.com/package/@unreleased/hellojs) TLS
 client; `undici` is bundled as an explicit alternative.
+
+If you install the packaged tarball directly (rather than the checkout above,
+whose dev install already includes it), setup and browser-backed auth repair
+additionally need the optional peer:
+
+```bash
+npm install playwright-core   # required for `amc setup` / `amc auth repair --listing-url ...`
+```
+
+Without it those commands fail closed with `AMC_PLAYWRIGHT_SETUP_REQUIRED`.
+`braintree-web` stays optional and is only needed if you explicitly configure
+the agent-paid checkout capability (see
+`templates/amc-capabilities.template.cjs`).
 
 ## Library usage (recommended)
 

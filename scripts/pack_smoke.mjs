@@ -9,6 +9,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
   readdirSync,
@@ -54,6 +55,32 @@ try {
   // (2) Installed bin prints help and exits cleanly.
   const helpOut = run("node", [path.join("node_modules", ".bin", "amc"), "--help"], consumer);
   if (!/Usage:\s+amc/.test(helpOut)) throw new Error("amc --help did not render usage");
+
+  // (2b) Auth-repair capability: installing the lock-pinned playwright-core
+  // alongside the tarball must make it resolvable FROM THE PACKAGE'S OWN
+  // module tree (what `amc auth repair --listing-url` requires). No browser
+  // download and no network beyond the npm registry.
+  const lock = JSON.parse(readFileSync(path.join(repoRoot, "package-lock.json"), "utf8"));
+  const playwrightPin = lock.packages?.["node_modules/playwright-core"]?.version;
+  if (!playwrightPin) throw new Error("package-lock.json does not pin playwright-core");
+  run(
+    "npm",
+    ["install", "--no-audit", "--no-fund", "--no-save", `playwright-core@${playwrightPin}`],
+    consumer,
+  );
+  writeFileSync(
+    path.join(consumer, "playwright-resolution-check.cjs"),
+    [
+      "const { createRequire } = require('node:module');",
+      "const packaged = createRequire(require.resolve('@ashah360/open-amc'));",
+      "packaged.resolve('playwright-core');",
+      "console.log('playwright-resolution ok');",
+    ].join("\n"),
+  );
+  const resolutionOut = run("node", ["playwright-resolution-check.cjs"], consumer);
+  if (!resolutionOut.includes("playwright-resolution ok")) {
+    throw new Error("packaged module tree cannot resolve pinned playwright-core");
+  }
 
   // (3) Git-style install: only tracked working-tree files (no dist), then a
   // plain `npm install` must build dist through `prepare` (no lifecycle

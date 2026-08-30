@@ -61,6 +61,7 @@ require_command() {
 }
 require_command git
 require_command npm
+require_command node
 
 is_open_amc_checkout() {
   [ -f "$1/package.json" ] && grep -q '"@ashah360/open-amc"' "$1/package.json"
@@ -88,6 +89,23 @@ fi
 
 log "Installing dependencies (builds the CLI via npm prepare)"
 (cd "$OPEN_AMC_HOME" && npm install --no-audit --no-fund)
+
+# --- Auth-repair capability: install the exact lock-pinned playwright-core
+# into the PRIVATE checkout (never globally). playwright-core downloads no
+# browser; an installed Chrome/Chromium channel remains the prerequisite.
+# Payment stays optional: braintree-web is NOT installed here (see
+# templates/amc-capabilities.template.cjs for the explicit opt-in).
+PLAYWRIGHT_PIN="$(cd "$OPEN_AMC_HOME" && node -p "(require('./package-lock.json').packages['node_modules/playwright-core']||{}).version||''")"
+if [ -z "$PLAYWRIGHT_PIN" ]; then
+  echo "error: package-lock.json does not pin playwright-core; cannot install the auth repair capability" >&2
+  exit 1
+fi
+log "Installing pinned playwright-core@$PLAYWRIGHT_PIN for auth repair (no browser download)"
+(cd "$OPEN_AMC_HOME" && npm install --no-audit --no-fund --no-save "playwright-core@$PLAYWRIGHT_PIN")
+if ! (cd "$OPEN_AMC_HOME" && node -e "require.resolve('playwright-core')" >/dev/null 2>&1); then
+  echo "error: playwright-core@$PLAYWRIGHT_PIN did not land in $OPEN_AMC_HOME/node_modules; auth repair (amc auth repair --listing-url ...) would fail with AMC_PLAYWRIGHT_SETUP_REQUIRED. Re-run this installer or run: (cd \"$OPEN_AMC_HOME\" && npm install --no-save playwright-core@$PLAYWRIGHT_PIN)" >&2
+  exit 1
+fi
 
 # --- Expose the CLI.
 mkdir -p "$BIN_DIR"

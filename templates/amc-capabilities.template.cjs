@@ -17,6 +17,12 @@
  * Note: `amc auth repair --listing-url <official AMC theater URL>` already
  * ships built-in browser repair, so most users need NO module for repair.
  * Provide `browserRepair` here only to customize the adapter.
+ *
+ * Install requirements when you opt in to agent-paid checkout: the optional
+ * Playwright FraudNet collector needs both optional peers installed next to
+ * the package (`npm install playwright-core braintree-web@3.144.0`). Neither
+ * is required for reads, cart holds, human handoff, or auth repair via the
+ * pinned installer (which installs playwright-core for you).
  */
 
 exports.createAmcCapabilities = function createAmcCapabilities() {
