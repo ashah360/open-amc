@@ -1,7 +1,7 @@
 ---
 name: open-amc
 description: Buy AMC movie tickets safely with the amc CLI.
-version: 1.0.2
+version: 1.0.3
 author: Arman (ashah360), Hermes Agent
 license: MIT
 platforms: [linux, macos]

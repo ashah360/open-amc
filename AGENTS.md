@@ -11,7 +11,7 @@ respect provider limits, and never blind-retry writes.
 ## Install (public Git; pinned installer preferred)
 
 ```bash
-git clone --branch v0.1.3 --depth 1 https://github.com/ashah360/open-amc.git
+git clone --branch v0.1.4 --depth 1 https://github.com/ashah360/open-amc.git
 bash open-amc/install.sh --agent auto   # installs ~/.local/bin/amc + the skill
 ```
 
@@ -61,6 +61,12 @@ amc doctor --json
   after a validated session keeps its own typed/raw code. Treat a bare
   transport error on a read the same way — re-run once, then run `amc auth
   repair` — but do not assume every such error is pre-mapped.
+- A successful `amc setup`/`showtimes --theater-url` persists the validated
+  canonical theater URL on the session, so a later `seats`/cart process (which
+  has no theater URL) can perform bounded direct re-admission for that theater.
+  This never launches a browser implicitly; a genuine browser-required
+  admission still returns `AMC_SESSION_REPAIR_REQUIRED` telling the user to run
+  `amc setup`.
 
 ## The two purchase paths (both start with one cart)
 
