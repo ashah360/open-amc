@@ -80,6 +80,8 @@ export type {
 export {
   CartCreationOutcomeUnknownError,
   CartHoldWithoutSnapshotError,
+  CartIntentUnavailableError,
+  CartNotResumableError,
   ChallengePaymentSetupError,
   CheckoutOutcomeUnknownError,
   CheckoutSessionOwnershipError,

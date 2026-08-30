@@ -77,6 +77,38 @@ export class CartHoldWithoutSnapshotError extends CartCreationOutcomeUnknownErro
   }
 }
 
+/**
+ * A cart/order token cannot be previewed or checked out because this CLI has no
+ * durable record of the ORIGINAL cart intent for it. The projection needs the
+ * original seat/SKU invariant and must never synthesize it from the provider
+ * response, so this is the actionable, cross-process replacement for a
+ * low-level projection drift (`cart.intent`): agent-driven checkout requires a
+ * cart created (and journaled) by this CLI via `amc cart create ...`. The human
+ * checkout URL returned by `cart create` is unaffected and usable independently.
+ */
+export class CartIntentUnavailableError extends Error {
+  readonly code = "AMC_CART_INTENT_UNAVAILABLE";
+  constructor(readonly orderToken: string) {
+    super(
+      "AMC cannot preview or check out this order token: no original cart intent is journaled for it by this CLI. Create the cart with `amc cart create ...` first (agent checkout requires a cart this CLI journaled); the checkout URL from `cart create` still works for a human.",
+    );
+  }
+}
+
+/**
+ * The journaled attempt for this order token exists but is not in an
+ * open/resumable cart state (e.g. it was released, not purchased, already
+ * confirmed, or is mid-dispatch), so it must not be previewed as an open cart.
+ */
+export class CartNotResumableError extends Error {
+  readonly code = "AMC_CART_NOT_OPEN";
+  constructor(readonly state: string) {
+    super(
+      `AMC cart for this order token is ${state}, not an open cart; it cannot be previewed for checkout.`,
+    );
+  }
+}
+
 /** An OrderFulfill dispatch whose outcome could not be authoritatively read. */
 export class CheckoutOutcomeUnknownError extends UnknownWriteOutcomeError {
   readonly operation = "checkout" as const;
@@ -546,9 +578,65 @@ export class AmcCommerceService {
   async inspectCart(orderToken: string, email: string): Promise<CartSnapshot> {
     requireNonEmpty(orderToken, "order token");
     requireEmail(email);
-    const cart = await this.options.executor.inspectCart(orderToken, email);
-    validateOpenCart(cart, this.now());
-    return clone(cart);
+    const journal = this.options.journal;
+    if (journal) {
+      // loadByOrderToken tamper-checks the alias and throws the typed journal
+      // corrupt error on mismatch.
+      const attempt = await journal.loadByOrderToken(orderToken);
+      if (attempt) {
+        // Durable cross-process recovery: recover the ORIGINAL cart intent from
+        // the journal and project the provider cart against it. This is what
+        // makes token-first `checkout preview` (and the fresh preview inside
+        // `checkout submit`) work in a new CLI process.
+        return journal.withIntentLock(attempt.intent, async () => {
+          const current = await journal.loadByOrderToken(orderToken);
+          if (!current) return this.inspectCartWithoutIntent(orderToken, email);
+          if (
+            current.state !== "CART_TOKEN_RECEIVED" &&
+            current.state !== "CART_OPEN"
+          ) {
+            // Released / not-purchased / confirmed / mid-dispatch fail closed:
+            // they must never be previewed as an open cart.
+            throw new CartNotResumableError(current.state);
+          }
+          const cart = await this.options.executor.inspectCart(
+            orderToken,
+            email,
+            structuredClone(current.intent),
+          );
+          validateCartAgainstIntent(cart, current.intent, this.now());
+          // Persist the provider-authoritative total as the existing recover
+          // flow does, so later recovery compares against it, not the estimate.
+          await journal.save({
+            ...current,
+            state: "CART_OPEN",
+            cartTotal: cart.total,
+            updatedAt: this.now().toISOString(),
+          });
+          return clone(cart);
+        });
+      }
+    }
+    // No journal, or the journal has no attempt for this token: fall back to the
+    // executor's own (same-process) projection. A genuinely unavailable intent
+    // surfaces the actionable typed error rather than a low-level drift.
+    return this.inspectCartWithoutIntent(orderToken, email);
+  }
+
+  private async inspectCartWithoutIntent(
+    orderToken: string,
+    email: string,
+  ): Promise<CartSnapshot> {
+    try {
+      const cart = await this.options.executor.inspectCart(orderToken, email);
+      validateOpenCart(cart, this.now());
+      return clone(cart);
+    } catch (error) {
+      if (isMissingCartIntent(error)) {
+        throw new CartIntentUnavailableError(orderToken);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -680,9 +768,13 @@ export class AmcCommerceService {
       await this.prepareCheckout(input.preview.orderToken, input.vaultPointer);
     }
 
+    // Thread the durable intent so these pre-dispatch re-reads project the cart
+    // in a fresh CLI process too (submit runs after a token-first preview).
+    const submitIntent = attempt ? structuredClone(attempt.intent) : undefined;
     const beforeCard = await this.options.executor.inspectCart(
       input.preview.orderToken,
       input.email,
+      submitIntent,
     );
     assertCartMatchesPreview(beforeCard, input.preview, this.now());
     const payment = await this.options.payment.secureFill({
@@ -697,6 +789,7 @@ export class AmcCommerceService {
     const beforePurchase = await this.options.executor.inspectCart(
       input.preview.orderToken,
       input.email,
+      submitIntent,
     );
     assertCartMatchesPreview(beforePurchase, input.preview, this.now());
     if (journal && attempt) {
@@ -1143,6 +1236,19 @@ export class AmcCommerceService {
       this.activeOrders.delete(key);
     }
   }
+}
+
+/**
+ * Duck-typed detection of the projection's "no bound cart intent" drift
+ * (`AMC_ORDER_PROJECTION_ERROR` on `cart.intent`), kept provider-agnostic so
+ * the service does not import a concrete projection implementation.
+ */
+function isMissingCartIntent(error: unknown): boolean {
+  return (
+    isRecord(error) &&
+    error.code === "AMC_ORDER_PROJECTION_ERROR" &&
+    error.field === "cart.intent"
+  );
 }
 
 function assertCheckoutSessionOwner(
