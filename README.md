@@ -271,13 +271,26 @@ same-session retry past a transient direct-egress hiccup (an HTTP 429/5xx, a
 200 whose body is an interstitial, or a TLS/socket error such as `EPROTO`),
 which self-heals in practice. This is not a generic retry loop: it is single,
 transient-classified, same-session, and never launches a browser. Consequential
-**writes** (cart creation, checkout fulfillment, refunds) remain fail-closed
-with one narrow exception: when a write receives a COMPLETE HTTP 429 response
-(an explicit rate-limit rejection — the write was not executed), it is
-redispatched exactly once in the same session; a second 429 surfaces as the
-typed `AMC_WRITE_RATE_LIMITED`, a definite failure that is safe to rerun later.
-A transport error with no complete response is never retried and remains
-`AMC_WRITE_OUTCOME_UNKNOWN` (reconcile-only).
+**writes** (cart creation, checkout fulfillment, refunds) remain fail-closed,
+with a bounded recovery only for outcomes that are provably NOT executed —
+never more than two mutation dispatches total:
+
+- A COMPLETE HTTP 429 (explicit rate-limit rejection) is redispatched exactly
+  once in the same session; a persistent 429 surfaces as the typed
+  `AMC_WRITE_RATE_LIMITED`.
+- A COMPLETE anti-bot challenge (a Cloudflare 403 the edge blocked before the
+  origin mutation) triggers exactly one bounded **direct** session
+  re-admission — never a browser — followed by one redispatch; a persistent
+  challenge surfaces as the typed `AMC_WRITE_CHALLENGED`, and if re-admission
+  needs a browser it stops with `AMC_SESSION_REPAIR_REQUIRED` (zero redispatch).
+- A complete non-challenge **4xx** (e.g. `AMC_HTTP` 400/403) is a definite
+  rejection: typed, one dispatch, not auto-retried.
+
+Those cases are definite (nothing executed) and safe to rerun. A complete
+**5xx** is different — it does not prove non-execution (the origin may have
+mutated then failed), so it is treated like a transport error with **no
+complete HTTP response**: genuinely ambiguous, one dispatch, never retried, and
+surfaced as `AMC_WRITE_OUTCOME_UNKNOWN` (reconcile-only).
 
 ### Cross-process admission context
 

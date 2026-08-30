@@ -35,13 +35,23 @@ amc doctor --json
   conversation. `checkout submit` re-reads the exact cart named by `--token`
   at submit time, and the service fails closed unless it is the same open,
   unexpired cart.
-- **Never retry a failed write blindly.** On `AMC_WRITE_OUTCOME_UNKNOWN`, run
+- **Never retry a failed write blindly.** On `AMC_WRITE_OUTCOME_UNKNOWN` (a
+  transport failure with no complete HTTP response — bytes may have left), run
   the matching `reconcile` command; the JSON error carries the safe
-  reconciliation identifiers (order token, order number, seats). One built-in
-  exception needs no action from you: a write answered by a COMPLETE HTTP 429
-  (an explicit rejection — nothing executed) is redispatched exactly once
-  internally; a persistent 429 surfaces as the typed `AMC_WRITE_RATE_LIMITED`,
-  which is a definite failure you may rerun later — not an unknown outcome.
+  reconciliation identifiers (order token, order number, seats). Built-in
+  recovery handles the two cases that are provably NOT executed, each with a
+  single bounded redispatch and no action from you: a COMPLETE HTTP 429 is
+  redispatched once in the same session (persistent → typed
+  `AMC_WRITE_RATE_LIMITED`), and a COMPLETE anti-bot challenge (the edge
+  rejected the request before the mutation ran) triggers exactly one bounded
+  **direct** session re-admission — never a browser — then one redispatch
+  (persistent → typed `AMC_WRITE_CHALLENGED`; if re-admission needs a browser
+  it stops with `AMC_SESSION_REPAIR_REQUIRED`). Those typed codes are definite
+  failures safe to rerun later — not unknown outcomes. A complete non-challenge
+  **4xx** (e.g. `AMC_HTTP` 400/403) is likewise a definite rejection, not
+  auto-retried. A complete **5xx**, however, is NOT proof of non-execution (the
+  origin may have mutated then failed): it stays `AMC_WRITE_OUTCOME_UNKNOWN`
+  (reconcile-only), exactly like a transport error with no complete response.
 - **A cart hold is never stranded.** The CLI journals cart tokens privately by
   default (no config needed). If `cart create` fails after the provider issued a
   token, the error is `AMC_CART_HOLD_UNCONFIRMED` with

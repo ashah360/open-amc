@@ -96,9 +96,11 @@ object; failures emit `{"error":{"code","message",...}}`. Help/usage output
 5. If it fails with `AMC_WRITE_OUTCOME_UNKNOWN`, do NOT resubmit: run
    `amc checkout reconcile --token <orderToken> --email <email> --json` and
    report the result. Never release a cart after an ambiguous submit.
-   `AMC_WRITE_RATE_LIMITED` is different: the write was explicitly rejected
-   (HTTP 429 twice), nothing executed — wait briefly and rerun the same
-   command once; no reconcile needed.
+   `AMC_WRITE_RATE_LIMITED` and `AMC_WRITE_CHALLENGED` are different: the write
+   was explicitly rejected (a persistent HTTP 429, or an anti-bot challenge the
+   edge blocked before the mutation ran) and nothing executed — wait briefly
+   and rerun the same command once; no reconcile needed. A persistent challenge
+   may need an explicit `amc auth repair`.
 6. On an interactive payment challenge (3DS / user action required), stop and
    hand the flow to the human.
 

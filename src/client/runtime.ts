@@ -445,6 +445,48 @@ export class AmcRuntime {
     }
   }
 
+  /**
+   * Narrow, write-only DIRECT session re-admission for the anti-bot-challenge
+   * write recovery path. It refreshes the session via the bounded direct
+   * Queue-it admission ONLY — it NEVER launches a browser and NEVER re-runs the
+   * write callback — validates the fresh jar with the direct canary, persists
+   * it atomically, and returns a context bound to the refreshed cookies for the
+   * caller's single redispatch. Browser-required admission, a missing listing
+   * URL, or a transport/canary failure surface as the typed
+   * AmcSessionRepairRequiredError so the write is not redispatched. The old
+   * session is untouched on any failure (the manager only persists after the
+   * canary passes).
+   */
+  async refreshDirectForWrite(): Promise<AmcSessionContext> {
+    if (this.options.sessionRefresher) {
+      // Advanced/testing injected refresher wins, mirroring repairSession.
+      const fresh = await this.manager.refreshWith(
+        this.options.sessionRefresher,
+      );
+      return this.sessionContext(fresh);
+    }
+    const refresher = new DirectOnlySessionRefresher({
+      refresh: (previous) => this.directRefresher().refresh(previous),
+    });
+    let fresh: AmcSession;
+    try {
+      fresh = await this.manager.refreshWith(refresher);
+    } catch (error) {
+      if (error instanceof AmcSessionRepairRequiredError) throw error;
+      if (
+        error instanceof AmcChallengeError ||
+        error instanceof AmcAuthRejectedError ||
+        isTransportLevelFailure(error)
+      ) {
+        // Direct admission produced a jar the direct canary then rejected.
+        throw new AmcSessionRepairRequiredError("post-repair-canary");
+      }
+      throw error;
+    }
+    await this.persistAdmissionListingUrl();
+    return this.sessionContext(fresh);
+  }
+
   withAuthenticatedRead<T>(
     operation: (context: AmcSessionContext) => Promise<T>,
   ): Promise<T> {

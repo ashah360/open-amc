@@ -179,6 +179,28 @@ export class WriteRateLimitedError extends Error {
   }
 }
 
+/**
+ * The anti-bot edge rejected a write with a COMPLETE HTTP challenge response
+ * (e.g. a Cloudflare 403 positively matched by the challenge markers) — which
+ * means the edge blocked the request BEFORE it reached the origin mutation
+ * resolver, so no mutation occurred — both on the original dispatch and again
+ * after a single bounded direct session re-admission. This is a definite
+ * rejection, never an unknown outcome: no reconciliation is required. If it
+ * persists, an explicit `amc auth repair` (which may launch a browser) is the
+ * next step; the automatic path never launches one.
+ */
+export class WriteChallengedError extends Error {
+  readonly code = "AMC_WRITE_CHALLENGED";
+  constructor(
+    readonly operation:
+      "cart" | "purchase" | "refund" | "release" | "expiration",
+  ) {
+    super(
+      `AMC ${operation} request was rejected by the anti-bot edge (HTTP challenge) on both the original dispatch and after a bounded direct session re-admission; the edge blocked it before the mutation ran (no mutation occurred). If this persists, run \`amc auth repair --listing-url <official theater URL>\`.`,
+    );
+  }
+}
+
 export class PaymentSecurityChallengeError extends Error {
   readonly code = "AMC_PAYMENT_SECURITY_CHALLENGE";
   constructor(readonly challengeContext?: { readonly opaque: symbol }) {

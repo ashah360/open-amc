@@ -37,6 +37,7 @@ import {
   Money,
   PurchaseResult,
   RefundOrderSnapshot,
+  WriteChallengedError,
   WriteRateLimitedError,
 } from "./executor";
 import {
@@ -143,26 +144,95 @@ export class ScopedAmcGraphqlClient {
     envelope: GraphqlEnvelope<Variables>,
   ): Promise<unknown> {
     return this.runtime.withAuthenticatedWrite(async (context) => {
-      try {
-        let response = await this.dispatchRaw(context, envelope, true);
-        if (response.status === 429) {
-          // A COMPLETE HTTP 429 response is the provider/edge explicitly
-          // rejecting the request — the write was not executed — so exactly
-          // one immediate same-session redispatch is safe. A transport throw
-          // (no complete response) never reaches this branch and stays
-          // ambiguous below with zero retry.
-          response = await this.dispatchRaw(context, envelope, true);
-          if (response.status === 429) {
+      // Bounded write budget: AT MOST two mutation dispatches, and AT MOST one
+      // recovery action between them — either a single same-session retry after
+      // a complete HTTP 429, OR a single bounded direct session re-admission
+      // after a complete anti-bot challenge. Whatever happens on the second
+      // dispatch is terminal; there is never a third. A transport throw (no
+      // complete HTTP response) is NEVER retried and stays ambiguous.
+      let current = context;
+      for (let dispatch = 0; ; dispatch++) {
+        let response: { status: number; bodyText: string };
+        try {
+          response = await this.dispatchRaw(current, envelope, true);
+        } catch (error) {
+          // Only a missing-cookie precondition is a contract error; anything
+          // else here is a transport failure with no complete HTTP response,
+          // so the outcome is genuinely unknown (bytes may have left).
+          if (error instanceof AmcGraphqlContractError) throw error;
+          throw new AmbiguousWriteError(operation);
+        }
+        const outcome = this.classifyWriteResponse(
+          response,
+          envelope.operationName,
+        );
+        if (outcome.kind === "ok") return outcome.value;
+        if (outcome.kind === "ambiguous") {
+          // A complete 5xx does NOT prove non-execution — the origin may have
+          // mutated and then failed to respond — so it stays ambiguous with a
+          // single dispatch and no retry, exactly like a transport throw.
+          throw new AmbiguousWriteError(operation);
+        }
+        if (dispatch >= 1) {
+          // Second dispatch is terminal — no third call.
+          if (outcome.kind === "rate-limited") {
             throw new WriteRateLimitedError(operation);
           }
+          if (outcome.kind === "challenge") {
+            throw new WriteChallengedError(operation);
+          }
+          throw outcome.error;
         }
-        return this.parseGraphResponse(response, envelope.operationName);
-      } catch (error) {
-        if (error instanceof AmcGraphqlContractError) throw error;
-        if (error instanceof WriteRateLimitedError) throw error;
-        throw new AmbiguousWriteError(operation);
+        // First dispatch: spend the single recovery action, or fail definitely.
+        if (outcome.kind === "rate-limited") {
+          // Exactly one immediate SAME-session redispatch.
+          continue;
+        }
+        if (outcome.kind === "challenge") {
+          // Exactly one bounded DIRECT re-admission (never launches a browser).
+          // Browser-required, missing-listing-URL, or transport/canary failures
+          // surface as a typed AMC_SESSION_REPAIR_REQUIRED with zero redispatch.
+          current = await this.runtime.refreshDirectForWrite();
+          continue;
+        }
+        // A COMPLETE 4xx (non-challenge 400/403, or 401 auth reject) or a
+        // contract drift is a definite rejection: the request reached the
+        // origin and was refused before mutating. Preserve the typed error;
+        // no retry beyond the explicit 429 rule above.
+        throw outcome.error;
       }
     });
+  }
+
+  /**
+   * Classify a COMPLETE write HTTP response. Only outcomes that are provably not
+   * executed become retryable/definite: a 429 is an explicit rate-limit
+   * rejection; a challenge (403/429 with anti-bot markers) is an edge rejection
+   * before the origin mutation; a complete 4xx (or contract drift) is a definite
+   * rejection. A complete 5xx is NOT proof of non-execution (the origin may have
+   * mutated then failed), so it is reported as `ambiguous` and handled like a
+   * transport throw (reconcile-only, no retry); a 200 parses to the result.
+   */
+  private classifyWriteResponse(
+    response: { status: number; bodyText: string },
+    operationName: string,
+  ):
+    | { kind: "ok"; value: unknown }
+    | { kind: "rate-limited" }
+    | { kind: "challenge" }
+    | { kind: "ambiguous" }
+    | { kind: "terminal"; error: Error } {
+    if (response.status === 429) return { kind: "rate-limited" };
+    if (response.status >= 500) return { kind: "ambiguous" };
+    try {
+      return {
+        kind: "ok",
+        value: this.parseGraphResponse(response, operationName),
+      };
+    } catch (error) {
+      if (error instanceof AmcChallengeError) return { kind: "challenge" };
+      return { kind: "terminal", error: error as Error };
+    }
   }
 
   private async dispatch(
