@@ -1,9 +1,18 @@
 import { createHash } from "node:crypto";
+import { SessionStore } from "../auth-session";
 import {
-  CheckoutAttempt,
-  CheckoutJournal,
-  RefundAttempt,
-} from "./checkout-journal";
+  CartIntentRecord,
+  CartIntentStore,
+  readLegacyAttemptByToken,
+} from "./cart-intent-store";
+import { PendingWriteStore } from "./pending-write-store";
+import {
+  intentHash,
+  refundHash,
+  selectionHash,
+  sha256,
+} from "./intent-identity";
+import { AmcCommerceProjectionProvider } from "./graphql-executor";
 import {
   AmbiguousWriteError,
   CartCreateIntent,
@@ -17,6 +26,20 @@ import {
 } from "./executor";
 
 const PREVIEW_MAX_AGE_MS = 2 * 60 * 1000;
+
+/**
+ * After an ambiguous fulfillment (money may have moved), a Pending+paid0 order
+ * is only declared "not purchased" once this quiet window has elapsed AND a
+ * fresh projection still shows Pending+paid0 — Cloudflare/edge settling can lag.
+ */
+export const PURCHASE_QUIET_WINDOW_MS = 60_000;
+
+/**
+ * A tokenless cart dispatch (CartCreateOrder whose response never yielded a
+ * token) blocks a duplicate for the same seat selection for this long, the
+ * documented provider hold assumption, after which it is lazily cleared.
+ */
+export const CART_HOLD_TTL_MS = 30 * 60_000;
 
 export class ConsequenceMismatchError extends Error {
   readonly code = "AMC_CONSEQUENCE_MISMATCH";
@@ -109,6 +132,23 @@ export class CartNotResumableError extends Error {
   }
 }
 
+/**
+ * A previously ambiguous fulfillment is still inside the bounded settling
+ * window: the provider shows Pending + nothing paid, but not long enough has
+ * elapsed since dispatch to declare it definitely not purchased. The
+ * uncertainty marker is preserved; the caller must neither release nor
+ * resubmit yet. This is a typed unknown (never a misleading "not purchased").
+ */
+export class CheckoutSettlingError extends UnknownWriteOutcomeError {
+  override readonly code = "AMC_CHECKOUT_SETTLING";
+  readonly operation = "checkout" as const;
+  constructor(readonly reconciliation: UnknownOutcomeReconciliation) {
+    super(
+      "AMC fulfillment outcome is still settling (provider shows the order pending and unpaid, but the settle window has not elapsed); do not release or resubmit yet — reconcile again shortly.",
+    );
+  }
+}
+
 /** An OrderFulfill dispatch whose outcome could not be authoritatively read. */
 export class CheckoutOutcomeUnknownError extends UnknownWriteOutcomeError {
   readonly operation = "checkout" as const;
@@ -193,8 +233,21 @@ export interface CheckoutChallengePreview {
   confirmationToken: string;
 }
 
+/**
+ * Durable recovery: the immutable cart-intent identity store, the uncertainty
+ * ledger, and the backing SessionStore (used for a cross-process lock and the
+ * transitional legacy-record read). There is NO lifecycle state machine — the
+ * provider order projection is the sole truth.
+ */
+export interface CheckoutRecovery {
+  intents: CartIntentStore;
+  pending: PendingWriteStore;
+  store: SessionStore;
+}
+
 export interface AmcCommerceServiceOptions {
   executor: CommerceExecutor;
+  projections: AmcCommerceProjectionProvider;
   payment: PaymentExecutor;
   challengePayment?: PaymentExecutor;
   readiness?: {
@@ -206,7 +259,7 @@ export interface AmcCommerceServiceOptions {
     ): void | Promise<void>;
     release?(binding: string): void | Promise<void>;
   };
-  journal?: CheckoutJournal;
+  recovery?: CheckoutRecovery;
   now?: () => Date;
 }
 
@@ -243,6 +296,58 @@ export class AmcCommerceService {
     await this.options.readiness?.release?.(binding);
   }
 
+  private recoveryLock<T>(
+    rec: CheckoutRecovery,
+    key: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    return rec.store.withRefreshLock(
+      { provider: "amc-recovery-lock", account: digest(key) },
+      fn,
+    );
+  }
+
+  /**
+   * Resolve the durable cart-intent identity for a token, transparently
+   * migrating a legacy journal record on first access (read-only; legacy bytes
+   * are not deleted). Provider truth still decides the lifecycle afterward.
+   */
+  private async loadIntentRecord(
+    rec: CheckoutRecovery,
+    orderToken: string,
+  ): Promise<CartIntentRecord | null> {
+    const existing = await rec.intents.loadByToken(orderToken);
+    if (existing) return existing;
+    const legacy = await readLegacyAttemptByToken(rec.store, orderToken);
+    if (!legacy) return null;
+    // RELEASED holds carry no live identity; everything else keeps its intent
+    // and the provider decides what the order now is.
+    if (legacy.state === "RELEASED") return null;
+    await rec.intents.record({
+      orderToken: legacy.orderToken,
+      intent: legacy.intent,
+      createdAt: legacy.updatedAt,
+    });
+    if (
+      legacy.state === "PURCHASE_DISPATCHING" ||
+      legacy.state === "PURCHASE_CHALLENGE_DISPATCHING" ||
+      legacy.state === "RELEASE_DISPATCHING"
+    ) {
+      await rec.pending.mark({
+        operation:
+          legacy.state === "PURCHASE_DISPATCHING"
+            ? "purchase"
+            : legacy.state === "PURCHASE_CHALLENGE_DISPATCHING"
+              ? "purchase-challenge"
+              : "release",
+        key: orderToken,
+        intentHash: intentHash(legacy.intent),
+        dispatchedAt: legacy.updatedAt,
+      });
+    }
+    return rec.intents.loadByToken(orderToken);
+  }
+
   async recoverCheckout(input: {
     showtimeId: string;
     seatNames: string[];
@@ -253,90 +358,31 @@ export class AmcCommerceService {
     | { kind: "confirmed"; purchase: PurchaseResult & { reconciled: true } }
     | null
   > {
-    const journal = this.options.journal;
-    if (!journal) return null;
+    const rec = this.options.recovery;
+    if (!rec) return null;
     requireEmail(input.email);
-    const attempt = await journal.loadBySelection(
+    const token = await rec.intents.newestTokenForSelection(
       input.showtimeId,
       input.seatNames,
     );
-    if (!attempt) return null;
-    assertCheckoutSessionOwner(attempt, input.checkoutSessionId);
-    return journal.withIntentLock(attempt.intent, async () => {
-      const current = await journal.loadBySelection(
-        input.showtimeId,
-        input.seatNames,
-      );
-      if (!current)
-        throw new UnknownWriteOutcomeError(
-          "AMC checkout journal entry disappeared",
-        );
-      assertCheckoutSessionOwner(current, input.checkoutSessionId);
-      if (current.orderToken) {
-        let purchased: PurchaseResult | null;
-        try {
-          purchased = await this.options.payment.reconcilePurchase(
-            current.orderToken,
-            input.email,
-          );
-        } catch (error) {
-          if (!(error instanceof PurchaseNotCompletedError)) throw error;
-          await journal.save({
-            ...current,
-            state: "NOT_PURCHASED",
-            updatedAt: this.now().toISOString(),
-          });
-          await this.releaseCheckout(current.orderToken).catch(() => undefined);
-          throw error;
-        }
-        if (purchased) {
-          if (
-            purchased.orderToken !== current.orderToken ||
-            purchased.chargedTotal !==
-              (current.cartTotal ?? current.intent.expectedTotal) ||
-            !purchased.confirmationNumber
-          ) {
-            throw new ConsequenceMismatchError(
-              "recovered purchase does not match journal intent",
-            );
-          }
-          await journal.save({
-            ...current,
-            state: "CONFIRMED",
-            confirmationNumber: purchased.confirmationNumber,
-            chargedTotal: purchased.chargedTotal,
-            updatedAt: this.now().toISOString(),
-          });
-          return {
-            kind: "confirmed" as const,
-            purchase: { ...purchased, reconciled: true as const },
-          };
-        }
-      }
-      if (
-        (current.state === "CART_TOKEN_RECEIVED" ||
-          current.state === "CART_OPEN") &&
-        current.orderToken
-      ) {
-        const cart = await this.options.executor.inspectCart(
-          current.orderToken,
-          input.email,
-          current.intent,
-        );
-        validateCartAgainstIntent(cart, current.intent, this.now());
-        await journal.save({
-          ...current,
-          state: "CART_OPEN",
-          cartTotal: cart.total,
-          updatedAt: this.now().toISOString(),
-        });
-        return { kind: "cart" as const, cart: clone(cart) };
-      }
-      if (current.state === "PREPARED") return null;
-      throw new UnknownWriteOutcomeError(
-        `AMC checkout attempt is ${current.state}; no write will be repeated`,
-      );
+    if (!token) return null;
+    const record = await this.loadIntentRecord(rec, token);
+    if (!record) return null;
+    assertCheckoutSessionOwner(record, input.checkoutSessionId);
+    const life = await this.options.projections.projectLifecycle(token, {
+      intent: record.intent,
+      now: this.now(),
     });
+    if (life.kind === "purchased") {
+      return {
+        kind: "confirmed" as const,
+        purchase: { ...life.purchase, reconciled: true as const },
+      };
+    }
+    if (life.kind === "open" && life.cart) {
+      return { kind: "cart" as const, cart: clone(life.cart) };
+    }
+    return null;
   }
 
   async createCart(
@@ -345,10 +391,9 @@ export class AmcCommerceService {
   ): Promise<CartSnapshot> {
     validateCartIntent(intent);
     const binding = cartIntentBinding(intent);
-    const key = `cart:${binding}`;
-    return this.singleFlight(key, async () => {
-      const journal = this.options.journal;
-      if (!journal) {
+    return this.singleFlight(`cart:${binding}`, async () => {
+      const rec = this.options.recovery;
+      if (!rec) {
         await this.prepareCheckout(binding);
         let knownToken: string | null = null;
         try {
@@ -362,88 +407,76 @@ export class AmcCommerceService {
           throw error;
         }
       }
-      return journal.withIntentLock(intent, async () => {
-        let existing =
-          (await journal.load(intent)) ??
-          (await journal.loadByMutation(intent));
-        if (existing?.state === "RELEASED") {
-          await journal.resetReleased(existing);
-          existing = null;
-        } else if (existing?.state === "NOT_PURCHASED") {
-          await journal.resetNotPurchased(existing);
-          existing = null;
-        }
-        if (existing) assertCheckoutSessionOwner(existing, checkoutSessionId);
-        if (
-          (existing?.state === "CART_TOKEN_RECEIVED" ||
-            existing?.state === "CART_OPEN") &&
-          existing.orderToken
-        ) {
-          const recovered = await this.options.executor.inspectCart(
-            existing.orderToken,
-            "",
-            intent,
+      const seatNames = intent.seats.map((seat) => seat.name);
+      const selKey = selectionHash(intent.showtimeId, seatNames);
+      const hash = intentHash(intent);
+      return this.recoveryLock(rec, `cart:${selKey}`, async () => {
+        // A prior cart for this exact selection: let provider truth decide.
+        const priorToken = await rec.intents.newestTokenForSelection(
+          intent.showtimeId,
+          seatNames,
+        );
+        if (priorToken) {
+          const life = await this.options.projections.projectLifecycle(
+            priorToken,
+            { intent, now: this.now() },
           );
-          validateCartAgainstIntent(recovered, intent, this.now());
-          await journal.save({
-            ...existing,
-            state: "CART_OPEN",
-            cartTotal: recovered.total,
-            updatedAt: this.now().toISOString(),
-          });
-          return clone(recovered);
+          if (life.kind === "open" && life.cart) return clone(life.cart);
+          if (life.kind === "purchased") {
+            throw new ConsequenceMismatchError(
+              "a cart for these seats was already purchased",
+            );
+          }
+          if (life.kind === "ambiguous-paid" || life.kind === "drift") {
+            throw new UnknownWriteOutcomeError(
+              "the prior cart for these seats is unresolved; not creating a duplicate",
+            );
+          }
+          // closed-unpaid: the hold is gone; a new cart is allowed.
+        } else {
+          const marker = await rec.pending.load("cart", selKey);
+          if (marker) {
+            if (
+              this.now().getTime() - Date.parse(marker.dispatchedAt) <
+              CART_HOLD_TTL_MS
+            ) {
+              throw new UnknownWriteOutcomeError(
+                "a prior cart dispatch for these seats is still unresolved; not creating a duplicate",
+              );
+            }
+            await rec.pending.clear("cart", selKey);
+          }
         }
-        if (existing && existing.state !== "PREPARED") {
-          throw new UnknownWriteOutcomeError(
-            `AMC checkout attempt is ${existing.state}; cart creation will not be repeated`,
-          );
-        }
-        const attemptBinding = journal.attemptId(intent);
-        await this.prepareCheckout(attemptBinding);
-        const base: CheckoutAttempt = existing ?? {
-          version: 1,
-          attemptId: journal.attemptId(intent),
-          state: "PREPARED",
-          intent: clone(intent),
-          updatedAt: this.now().toISOString(),
-          ...(checkoutSessionId ? { checkoutSessionId } : {}),
-        };
-        if (!existing) await journal.save(base);
-        await journal.save({
-          ...base,
-          state: "CART_DISPATCHING",
-          updatedAt: this.now().toISOString(),
+        await rec.pending.mark({
+          operation: "cart",
+          key: selKey,
+          intentHash: hash,
+          dispatchedAt: this.now().toISOString(),
         });
+        await this.prepareCheckout(binding);
         let knownToken: string | null = null;
         try {
-          const cart = await this.dispatchCart(intent, async (orderToken) => {
+          return await this.dispatchCart(intent, async (orderToken) => {
             knownToken = orderToken;
-            await this.bindCheckout(attemptBinding, orderToken);
-            await journal.save({
-              ...base,
-              state: "CART_TOKEN_RECEIVED",
+            await rec.intents.record({
               orderToken,
-              updatedAt: this.now().toISOString(),
+              intent,
+              ...(checkoutSessionId ? { checkoutSessionId } : {}),
+              createdAt: this.now().toISOString(),
             });
+            await rec.pending.clear("cart", selKey);
+            await this.bindCheckout(binding, orderToken);
           });
-          await journal.save({
-            ...base,
-            state: "CART_OPEN",
-            orderToken: cart.orderToken,
-            cartTotal: cart.total,
-            updatedAt: this.now().toISOString(),
-          });
-          return cart;
         } catch (error) {
-          if (knownToken === null) await this.releaseCheckout(attemptBinding);
-          await journal.save({
-            ...base,
-            state: knownToken ? "CART_TOKEN_RECEIVED" : "UNKNOWN",
-            ...(knownToken ? { orderToken: knownToken } : {}),
-            updatedAt: this.now().toISOString(),
-          });
           if (knownToken !== null)
             throw this.cartHoldStranded(knownToken, intent);
+          // No token: clear the marker only on a DEFINITE rejection; an
+          // ambiguous outcome (UnknownWriteOutcomeError) keeps it so no
+          // duplicate cart is created before the provider resolves it.
+          if (!(error instanceof UnknownWriteOutcomeError)) {
+            await rec.pending.clear("cart", selKey);
+          }
+          await this.releaseCheckout(binding);
           throw error;
         }
       });
@@ -488,54 +521,153 @@ export class AmcCommerceService {
     return clone(cart);
   }
 
+  /**
+   * The single provider-authoritative resolution used by reconcile, release,
+   * and submit. One fresh projection decides the order's lifecycle; a still
+   * open cart that carries an outstanding purchase marker is reported as
+   * `settling` until the quiet window elapses, after which the resolved
+   * (not-purchased) marker is cleared and the cart remains open. Any definite
+   * resolution clears the relevant markers.
+   */
+  private async resolveLifecycle(
+    rec: CheckoutRecovery,
+    orderToken: string,
+    record: CartIntentRecord,
+  ): Promise<
+    | { kind: "open"; cart?: CartSnapshot }
+    | { kind: "purchased"; purchase: PurchaseResult }
+    | { kind: "closed-unpaid" }
+    | { kind: "settling" }
+    | { kind: "blocked" }
+  > {
+    const life = await this.options.projections.projectLifecycle(orderToken, {
+      intent: record.intent,
+      now: this.now(),
+    });
+    const marker =
+      (await rec.pending.load("purchase", orderToken)) ??
+      (await rec.pending.load("purchase-challenge", orderToken));
+    if (life.kind === "purchased") {
+      await rec.pending.clear("purchase", orderToken);
+      await rec.pending.clear("purchase-challenge", orderToken);
+      return { kind: "purchased", purchase: life.purchase };
+    }
+    if (life.kind === "closed-unpaid") {
+      await rec.pending.clear("purchase", orderToken);
+      await rec.pending.clear("purchase-challenge", orderToken);
+      return { kind: "closed-unpaid" };
+    }
+    if (life.kind === "ambiguous-paid" || life.kind === "drift") {
+      return { kind: "blocked" };
+    }
+    // open
+    if (marker) {
+      const elapsed = this.now().getTime() - Date.parse(marker.dispatchedAt);
+      if (elapsed < PURCHASE_QUIET_WINDOW_MS) return { kind: "settling" };
+      // Quiet window elapsed and still Pending+unpaid: the fulfillment did not
+      // execute. Clear the marker; the cart stays open for release or resubmit.
+      await rec.pending.clear(marker.operation, orderToken);
+    }
+    return { kind: "open", cart: life.cart };
+  }
+
+  /**
+   * Provider-authoritative checkout reconciliation for an order token. Replaces
+   * the raw projection read the client used to call directly. Returns the
+   * confirmed purchase (clearing markers) or null when the order is provably
+   * not purchased; throws a typed settling error inside the quiet window.
+   */
+  async reconcileCheckoutByToken(
+    orderToken: string,
+    email: string,
+    checkoutSessionId?: string,
+  ): Promise<(PurchaseResult & { reconciled: true }) | null> {
+    requireNonEmpty(orderToken, "order token");
+    requireEmail(email);
+    const rec = this.options.recovery;
+    if (!rec) {
+      const observed = await this.options.payment.reconcilePurchase(
+        orderToken,
+        email,
+      );
+      return observed ? { ...observed, reconciled: true as const } : null;
+    }
+    return this.recoveryLock(rec, `checkout:${orderToken}`, async () => {
+      const record = await this.loadIntentRecord(rec, orderToken);
+      if (!record) throw new CartIntentUnavailableError(orderToken);
+      assertCheckoutSessionOwner(record, checkoutSessionId);
+      const res = await this.resolveLifecycle(rec, orderToken, record);
+      if (res.kind === "purchased") {
+        return { ...res.purchase, reconciled: true as const };
+      }
+      if (res.kind === "settling") {
+        throw new CheckoutSettlingError({ orderToken });
+      }
+      if (res.kind === "blocked") {
+        throw new CheckoutOutcomeUnknownError(
+          "AMC order state is unresolved (money may have moved); reconcile again shortly",
+          { orderToken },
+        );
+      }
+      // open or closed-unpaid: provably not purchased.
+      return null;
+    });
+  }
+
   async releaseCart(
     orderToken: string,
     checkoutSessionId?: string,
   ): Promise<{ released: true }> {
     requireNonEmpty(orderToken, "order token");
-    const journal = this.options.journal;
-    if (!journal) return this.releaseCartStateless(orderToken);
-    const attempt = await journal.loadByOrderToken(orderToken);
-    if (!attempt)
-      throw new UnknownWriteOutcomeError("AMC cart is not journaled");
-    assertCheckoutSessionOwner(attempt, checkoutSessionId);
-    return journal.withIntentLock(attempt.intent, async () => {
-      const current = await journal.loadByOrderToken(orderToken);
-      if (!current)
-        throw new UnknownWriteOutcomeError(
-          "AMC checkout journal entry disappeared",
-        );
-      assertCheckoutSessionOwner(current, checkoutSessionId);
-      if (current.state === "RELEASED") return { released: true as const };
-      if (current.state === "RELEASE_DISPATCHING") {
-        throw new UnknownWriteOutcomeError(
-          "OrderDelete outcome remains unknown; release will not be redispatched",
-        );
-      }
-      if (
-        current.state !== "CART_OPEN" &&
-        current.state !== "CART_TOKEN_RECEIVED"
-      ) {
+    const rec = this.options.recovery;
+    if (!rec) return this.releaseCartStateless(orderToken);
+    return this.recoveryLock(rec, `release:${orderToken}`, async () => {
+      const record = await this.loadIntentRecord(rec, orderToken);
+      if (!record) return this.releaseCartStateless(orderToken);
+      assertCheckoutSessionOwner(record, checkoutSessionId);
+      const res = await this.resolveLifecycle(rec, orderToken, record);
+      if (res.kind === "purchased") {
         throw new ConsequenceMismatchError(
-          `AMC cart cannot be released from checkout state ${current.state}`,
+          "cart was purchased and cannot be released",
         );
       }
-      await journal.save({
-        ...current,
-        state: "RELEASE_DISPATCHING",
-        updatedAt: this.now().toISOString(),
+      if (res.kind === "closed-unpaid") return { released: true as const };
+      if (res.kind === "settling")
+        throw new CheckoutSettlingError({ orderToken });
+      if (res.kind === "blocked") {
+        throw new UnknownWriteOutcomeError(
+          "AMC cart state is unresolved; release will not be dispatched",
+        );
+      }
+      // open: dispatch OrderDelete exactly once behind a release marker.
+      await rec.pending.mark({
+        operation: "release",
+        key: orderToken,
+        intentHash: record.intentHash,
+        dispatchedAt: this.now().toISOString(),
       });
       try {
         await this.options.executor.deleteCart(orderToken);
-        await journal.save({
-          ...current,
-          state: "RELEASED",
-          updatedAt: this.now().toISOString(),
-        });
+        await rec.pending.clear("release", orderToken);
         return { released: true as const };
-      } catch {
-        throw new UnknownWriteOutcomeError(
+      } catch (error) {
+        if (!(error instanceof AmbiguousWriteError)) {
+          await rec.pending.clear("release", orderToken);
+          throw error;
+        }
+        let released = false;
+        try {
+          released = await this.options.executor.reconcileRelease(orderToken);
+        } catch {
+          released = false;
+        }
+        if (released) {
+          await rec.pending.clear("release", orderToken);
+          return { released: true as const };
+        }
+        throw new ReleaseOutcomeUnknownError(
           "OrderDelete outcome remains unknown; release will not be redispatched",
+          { orderToken },
         );
       } finally {
         await this.releaseCheckout(orderToken).catch(() => undefined);
@@ -578,46 +710,24 @@ export class AmcCommerceService {
   async inspectCart(orderToken: string, email: string): Promise<CartSnapshot> {
     requireNonEmpty(orderToken, "order token");
     requireEmail(email);
-    const journal = this.options.journal;
-    if (journal) {
-      // loadByOrderToken tamper-checks the alias and throws the typed journal
-      // corrupt error on mismatch.
-      const attempt = await journal.loadByOrderToken(orderToken);
-      if (attempt) {
-        // Durable cross-process recovery: recover the ORIGINAL cart intent from
-        // the journal and project the provider cart against it. This is what
-        // makes token-first `checkout preview` (and the fresh preview inside
-        // `checkout submit`) work in a new CLI process.
-        return journal.withIntentLock(attempt.intent, async () => {
-          const current = await journal.loadByOrderToken(orderToken);
-          if (!current) return this.inspectCartWithoutIntent(orderToken, email);
-          if (
-            current.state !== "CART_TOKEN_RECEIVED" &&
-            current.state !== "CART_OPEN"
-          ) {
-            // Released / not-purchased / confirmed / mid-dispatch fail closed:
-            // they must never be previewed as an open cart.
-            throw new CartNotResumableError(current.state);
-          }
-          const cart = await this.options.executor.inspectCart(
-            orderToken,
-            email,
-            structuredClone(current.intent),
-          );
-          validateCartAgainstIntent(cart, current.intent, this.now());
-          // Persist the provider-authoritative total as the existing recover
-          // flow does, so later recovery compares against it, not the estimate.
-          await journal.save({
-            ...current,
-            state: "CART_OPEN",
-            cartTotal: cart.total,
-            updatedAt: this.now().toISOString(),
-          });
-          return clone(cart);
-        });
+    const rec = this.options.recovery;
+    if (rec) {
+      const record = await this.loadIntentRecord(rec, orderToken);
+      if (record) {
+        // Recover the ORIGINAL intent and let ONE provider projection decide the
+        // lifecycle. This is what makes token-first `checkout preview` (and the
+        // fresh preview inside `checkout submit`) work in a new CLI process.
+        const life = await this.options.projections.projectLifecycle(
+          orderToken,
+          { intent: record.intent, now: this.now() },
+        );
+        if (life.kind === "open" && life.cart) return clone(life.cart);
+        // Purchased / closed / paid-ambiguous / drift must never be previewed
+        // as an open cart.
+        throw new CartNotResumableError(life.kind);
       }
     }
-    // No journal, or the journal has no attempt for this token: fall back to the
+    // No recovery store, or no durable intent for this token: fall back to the
     // executor's own (same-process) projection. A genuinely unavailable intent
     // surfaces the actionable typed error rather than a low-level drift.
     return this.inspectCartWithoutIntent(orderToken, email);
@@ -673,71 +783,34 @@ export class AmcCommerceService {
     vaultPointer: string;
   }): Promise<PurchaseResult & { reconciled: boolean }> {
     return this.singleFlight(input.preview.orderToken, async () => {
-      const journal = this.options.journal;
-      if (!journal) return this.submitCheckoutLocked(input);
-      const attempt = await journal.loadByOrderToken(input.preview.orderToken);
-      if (!attempt) return this.submitCheckoutLocked(input);
-      return journal.withIntentLock(attempt.intent, async () => {
-        const current = await journal.loadByOrderToken(
-          input.preview.orderToken,
-        );
-        if (!current)
-          throw new UnknownWriteOutcomeError(
-            "AMC checkout journal entry disappeared",
-          );
-        if (current.state === "CONFIRMED") {
-          const observed = await this.options.payment.reconcilePurchase(
-            input.preview.orderToken,
-            input.email,
-          );
-          if (!observed) {
-            throw new UnknownWriteOutcomeError(
-              "Recorded AMC purchase is not provider-confirmed",
+      const rec = this.options.recovery;
+      if (!rec) return this.submitCheckoutLocked(input);
+      const orderToken = input.preview.orderToken;
+      return this.recoveryLock(rec, `checkout:${orderToken}`, async () => {
+        const record = await this.loadIntentRecord(rec, orderToken);
+        if (!record) return this.submitCheckoutLocked(input);
+        // Resolve any unresolved prior fulfillment before dispatching again.
+        const marker =
+          (await rec.pending.load("purchase", orderToken)) ??
+          (await rec.pending.load("purchase-challenge", orderToken));
+        if (marker) {
+          const res = await this.resolveLifecycle(rec, orderToken, record);
+          if (res.kind === "purchased") {
+            validatePurchase(res.purchase, input.preview);
+            return { ...res.purchase, reconciled: true };
+          }
+          if (res.kind === "settling") {
+            throw new CheckoutSettlingError({ orderToken });
+          }
+          if (res.kind === "blocked") {
+            throw new CheckoutOutcomeUnknownError(
+              "AMC order state is unresolved; fulfillment will not be redispatched",
+              { orderToken },
             );
           }
-          validatePurchase(observed, input.preview);
-          return { ...observed, reconciled: true };
+          // open / closed-unpaid resolved as not purchased: fall through.
         }
-        if (current.state === "PURCHASE_DISPATCHING") {
-          let observed: PurchaseResult | null;
-          try {
-            observed = await this.options.payment.reconcilePurchase(
-              input.preview.orderToken,
-              input.email,
-            );
-          } catch (error) {
-            if (!(error instanceof PurchaseNotCompletedError)) throw error;
-            await journal.save({
-              ...current,
-              state: "NOT_PURCHASED",
-              updatedAt: this.now().toISOString(),
-            });
-            await this.releaseCheckout(input.preview.orderToken).catch(
-              () => undefined,
-            );
-            throw error;
-          }
-          if (!observed) {
-            throw new UnknownWriteOutcomeError(
-              "OrderFulfill outcome remains unknown after restart reconciliation",
-            );
-          }
-          validatePurchase(observed, input.preview);
-          await journal.save({
-            ...current,
-            state: "CONFIRMED",
-            confirmationNumber: observed.confirmationNumber,
-            chargedTotal: observed.chargedTotal,
-            updatedAt: this.now().toISOString(),
-          });
-          return { ...observed, reconciled: true };
-        }
-        if (current.state !== "CART_OPEN") {
-          throw new UnknownWriteOutcomeError(
-            `AMC checkout attempt is ${current.state}; fulfillment will not be dispatched`,
-          );
-        }
-        return this.submitCheckoutLocked(input, journal, current);
+        return this.submitCheckoutLocked(input, rec, record);
       });
     });
   }
@@ -749,8 +822,8 @@ export class AmcCommerceService {
       email: string;
       vaultPointer: string;
     },
-    journal?: CheckoutJournal,
-    attempt?: CheckoutAttempt,
+    rec?: CheckoutRecovery,
+    record?: CartIntentRecord,
   ): Promise<PurchaseResult & { reconciled: boolean }> {
     validateCheckoutConfirmation(
       input.preview,
@@ -759,44 +832,43 @@ export class AmcCommerceService {
       this.now(),
     );
     requireNonEmpty(input.vaultPointer, "vault pointer");
+    const orderToken = input.preview.orderToken;
     if (this.options.readiness?.assertPrepared) {
       await this.options.readiness.assertPrepared(
-        input.preview.orderToken,
+        orderToken,
         input.vaultPointer,
       );
     } else {
-      await this.prepareCheckout(input.preview.orderToken, input.vaultPointer);
+      await this.prepareCheckout(orderToken, input.vaultPointer);
     }
 
     // Thread the durable intent so these pre-dispatch re-reads project the cart
     // in a fresh CLI process too (submit runs after a token-first preview).
-    const submitIntent = attempt ? structuredClone(attempt.intent) : undefined;
+    const submitIntent = record ? structuredClone(record.intent) : undefined;
     const beforeCard = await this.options.executor.inspectCart(
-      input.preview.orderToken,
+      orderToken,
       input.email,
       submitIntent,
     );
     assertCartMatchesPreview(beforeCard, input.preview, this.now());
     const payment = await this.options.payment.secureFill({
-      orderToken: input.preview.orderToken,
+      orderToken,
       vaultPointer: input.vaultPointer,
     });
-    const card = await this.options.payment.addCard({
-      orderToken: input.preview.orderToken,
-      payment,
-    });
+    const card = await this.options.payment.addCard({ orderToken, payment });
 
     const beforePurchase = await this.options.executor.inspectCart(
-      input.preview.orderToken,
+      orderToken,
       input.email,
       submitIntent,
     );
     assertCartMatchesPreview(beforePurchase, input.preview, this.now());
-    if (journal && attempt) {
-      await journal.save({
-        ...attempt,
-        state: "PURCHASE_DISPATCHING",
-        updatedAt: this.now().toISOString(),
+    if (rec && record) {
+      await rec.pending.mark({
+        operation: "purchase",
+        key: orderToken,
+        intentHash: record.intentHash,
+        dispatchedAt: this.now().toISOString(),
       });
     }
 
@@ -804,67 +876,48 @@ export class AmcCommerceService {
     let reconciled = false;
     try {
       purchase = await this.options.payment.purchase({
-        orderToken: input.preview.orderToken,
+        orderToken,
         email: input.email,
         expectedTotal: input.preview.total,
         card,
       });
     } catch (error) {
       if (error instanceof PurchaseNotCompletedError) {
-        if (journal && attempt) {
-          await journal.save({
-            ...attempt,
-            state: "NOT_PURCHASED",
-            orderToken: input.preview.orderToken,
-            updatedAt: this.now().toISOString(),
-          });
-        }
-        await this.releaseCheckout(input.preview.orderToken).catch(
-          () => undefined,
-        );
+        if (rec) await rec.pending.clear("purchase", orderToken);
+        await this.releaseCheckout(orderToken).catch(() => undefined);
         throw error;
       }
-      if (!(error instanceof AmbiguousWriteError)) throw error;
+      if (!(error instanceof AmbiguousWriteError)) {
+        // A definite typed rejection (e.g. 4xx / challenge): nothing executed.
+        if (rec) await rec.pending.clear("purchase", orderToken);
+        throw error;
+      }
       let observed: PurchaseResult | null;
       try {
         observed = await this.options.payment.reconcilePurchase(
-          input.preview.orderToken,
+          orderToken,
           input.email,
         );
       } catch (reconcileError) {
         if (!(reconcileError instanceof PurchaseNotCompletedError))
           throw reconcileError;
-        if (journal && attempt) {
-          await journal.save({
-            ...attempt,
-            state: "NOT_PURCHASED",
-            orderToken: input.preview.orderToken,
-            updatedAt: this.now().toISOString(),
-          });
-        }
-        await this.releaseCheckout(input.preview.orderToken).catch(
-          () => undefined,
-        );
+        if (rec) await rec.pending.clear("purchase", orderToken);
+        await this.releaseCheckout(orderToken).catch(() => undefined);
         throw reconcileError;
       }
       if (!observed) {
-        throw new UnknownWriteOutcomeError(
+        // Keep the purchase marker: the bounded quiet window governs a later
+        // reconcile rather than declaring a misleading "not purchased" now.
+        throw new CheckoutOutcomeUnknownError(
           "OrderFulfill outcome remains unknown after reconciliation",
+          { orderToken },
         );
       }
       purchase = observed;
       reconciled = true;
     }
     validatePurchase(purchase, input.preview);
-    if (journal && attempt) {
-      await journal.save({
-        ...attempt,
-        state: "CONFIRMED",
-        confirmationNumber: purchase.confirmationNumber,
-        chargedTotal: purchase.chargedTotal,
-        updatedAt: this.now().toISOString(),
-      });
-    }
+    if (rec) await rec.pending.clear("purchase", orderToken);
     return { ...purchase, reconciled };
   }
 
@@ -884,9 +937,14 @@ export class AmcCommerceService {
       validatePurchase(reconciled, input.checkoutPreview);
       return { kind: "confirmed", ...reconciled, reconciled: true };
     }
+    const rec = this.options.recovery;
+    const record = rec
+      ? await this.loadIntentRecord(rec, input.checkoutPreview.orderToken)
+      : null;
     const cart = await this.options.executor.inspectCart(
       input.checkoutPreview.orderToken,
       input.email,
+      record ? structuredClone(record.intent) : undefined,
     );
     assertCartMatchesPreview(cart, input.checkoutPreview, this.now());
     return checkoutChallengePreview(cart, input.email, this.now());
@@ -899,46 +957,35 @@ export class AmcCommerceService {
     vaultPointer: string;
   }): Promise<PurchaseResult & { reconciled: boolean }> {
     return this.singleFlight(input.preview.orderToken, async () => {
-      const journal = this.options.journal;
-      if (!journal) return this.submitCheckoutChallengeLocked(input);
-      const attempt = await journal.loadByOrderToken(input.preview.orderToken);
-      if (!attempt) return this.submitCheckoutChallengeLocked(input);
-      return journal.withIntentLock(attempt.intent, async () => {
-        const current = await journal.loadByOrderToken(
-          input.preview.orderToken,
-        );
-        if (!current)
-          throw new UnknownWriteOutcomeError(
-            "AMC checkout journal entry disappeared",
-          );
-        const challengePayment = this.options.challengePayment;
-        if (!challengePayment) throw new ChallengePaymentSetupError();
-        if (current.state === "PURCHASE_CHALLENGE_DISPATCHING") {
-          const observed = await challengePayment.reconcilePurchase(
-            input.preview.orderToken,
-            input.email,
-          );
-          if (!observed) {
-            throw new UnknownWriteOutcomeError(
-              "Challenge OrderFulfill outcome remains unknown after restart reconciliation",
+      const rec = this.options.recovery;
+      if (!rec) return this.submitCheckoutChallengeLocked(input);
+      const orderToken = input.preview.orderToken;
+      return this.recoveryLock(rec, `checkout:${orderToken}`, async () => {
+        const record = await this.loadIntentRecord(rec, orderToken);
+        if (!record) return this.submitCheckoutChallengeLocked(input);
+        const marker =
+          (await rec.pending.load("purchase-challenge", orderToken)) ??
+          (await rec.pending.load("purchase", orderToken));
+        if (marker) {
+          const res = await this.resolveLifecycle(rec, orderToken, record);
+          if (res.kind === "purchased") {
+            validatePurchase(
+              res.purchase,
+              challengeAsCheckoutPreview(input.preview),
+            );
+            return { ...res.purchase, reconciled: true };
+          }
+          if (res.kind === "settling") {
+            throw new CheckoutSettlingError({ orderToken });
+          }
+          if (res.kind === "blocked") {
+            throw new CheckoutOutcomeUnknownError(
+              "AMC order state is unresolved; challenge fulfillment will not be redispatched",
+              { orderToken },
             );
           }
-          validatePurchase(observed, challengeAsCheckoutPreview(input.preview));
-          await journal.save({
-            ...current,
-            state: "CONFIRMED",
-            confirmationNumber: observed.confirmationNumber,
-            chargedTotal: observed.chargedTotal,
-            updatedAt: this.now().toISOString(),
-          });
-          return { ...observed, reconciled: true };
         }
-        if (current.state !== "CART_OPEN") {
-          throw new UnknownWriteOutcomeError(
-            `AMC checkout attempt is ${current.state}; challenge fulfillment will not be dispatched`,
-          );
-        }
-        return this.submitCheckoutChallengeLocked(input, journal, current);
+        return this.submitCheckoutChallengeLocked(input, rec, record);
       });
     });
   }
@@ -950,8 +997,8 @@ export class AmcCommerceService {
       email: string;
       vaultPointer: string;
     },
-    journal?: CheckoutJournal,
-    attempt?: CheckoutAttempt,
+    rec?: CheckoutRecovery,
+    record?: CartIntentRecord,
   ): Promise<PurchaseResult & { reconciled: boolean }> {
     validateCheckoutChallengeConfirmation(
       input.preview,
@@ -960,47 +1007,50 @@ export class AmcCommerceService {
       this.now(),
     );
     requireNonEmpty(input.vaultPointer, "vault pointer");
+    const orderToken = input.preview.orderToken;
+    const checkoutBinding = challengeAsCheckoutPreview(input.preview);
 
     const alreadyPurchased = await this.options.payment.reconcilePurchase(
-      input.preview.orderToken,
+      orderToken,
       input.email,
     );
-    const checkoutBinding = challengeAsCheckoutPreview(input.preview);
     if (alreadyPurchased) {
       validatePurchase(alreadyPurchased, checkoutBinding);
+      if (rec) await rec.pending.clear("purchase-challenge", orderToken);
       return { ...alreadyPurchased, reconciled: true };
     }
 
     const challengePayment = this.options.challengePayment;
     if (!challengePayment) throw new ChallengePaymentSetupError();
+    const submitIntent = record ? structuredClone(record.intent) : undefined;
     const current = await this.options.executor.inspectCart(
-      input.preview.orderToken,
+      orderToken,
       input.email,
+      submitIntent,
     );
     assertCartMatchesPreview(current, checkoutBinding, this.now());
     const payment = await challengePayment.secureFill({
-      orderToken: input.preview.orderToken,
+      orderToken,
       vaultPointer: input.vaultPointer,
     });
-    const card = await challengePayment.addCard({
-      orderToken: input.preview.orderToken,
-      payment,
-    });
+    const card = await challengePayment.addCard({ orderToken, payment });
 
     const immediatelyBeforePurchase = await this.options.executor.inspectCart(
-      input.preview.orderToken,
+      orderToken,
       input.email,
+      submitIntent,
     );
     assertCartMatchesPreview(
       immediatelyBeforePurchase,
       checkoutBinding,
       this.now(),
     );
-    if (journal && attempt) {
-      await journal.save({
-        ...attempt,
-        state: "PURCHASE_CHALLENGE_DISPATCHING",
-        updatedAt: this.now().toISOString(),
+    if (rec && record) {
+      await rec.pending.mark({
+        operation: "purchase-challenge",
+        key: orderToken,
+        intentHash: record.intentHash,
+        dispatchedAt: this.now().toISOString(),
       });
     }
 
@@ -1008,35 +1058,31 @@ export class AmcCommerceService {
     let reconciled = false;
     try {
       purchase = await challengePayment.purchase({
-        orderToken: input.preview.orderToken,
+        orderToken,
         email: input.email,
         expectedTotal: input.preview.total,
         card,
       });
     } catch (error) {
-      if (!(error instanceof AmbiguousWriteError)) throw error;
+      if (!(error instanceof AmbiguousWriteError)) {
+        if (rec) await rec.pending.clear("purchase-challenge", orderToken);
+        throw error;
+      }
       const observed = await challengePayment.reconcilePurchase(
-        input.preview.orderToken,
+        orderToken,
         input.email,
       );
       if (!observed) {
-        throw new UnknownWriteOutcomeError(
+        throw new CheckoutOutcomeUnknownError(
           "Challenge OrderFulfill outcome remains unknown after reconciliation",
+          { orderToken },
         );
       }
       purchase = observed;
       reconciled = true;
     }
     validatePurchase(purchase, checkoutBinding);
-    if (journal && attempt) {
-      await journal.save({
-        ...attempt,
-        state: "CONFIRMED",
-        confirmationNumber: purchase.confirmationNumber,
-        chargedTotal: purchase.chargedTotal,
-        updatedAt: this.now().toISOString(),
-      });
-    }
+    if (rec) await rec.pending.clear("purchase-challenge", orderToken);
     return { ...purchase, reconciled };
   }
 
@@ -1089,64 +1135,45 @@ export class AmcCommerceService {
         input.email,
         this.now(),
       );
-      const journal = this.options.journal;
-      if (!journal) return this.submitRefundLocked(input);
-      return journal.withRefundLock(
+      const rec = this.options.recovery;
+      if (!rec) return this.submitRefundLocked(input);
+      const key = refundHash(
         input.preview.orderToken,
         input.preview.lineNumbers,
-        async () => {
-          const existing = await journal.loadRefund(
-            input.preview.orderToken,
-            input.preview.lineNumbers,
+      );
+      return this.recoveryLock(rec, `refund:${key}`, async () => {
+        const marker = await rec.pending.load("refund", key);
+        if (marker) {
+          // A prior refund dispatch is unresolved: provider truth decides.
+          const verified = await this.options.executor.searchOrder(
+            input.preview.orderNumber,
+            input.email,
           );
-          if (
-            existing?.state === "REFUND_DISPATCHING" ||
-            existing?.state === "REFUND_OBSERVED"
-          ) {
-            const verified = await this.options.executor.searchOrder(
-              input.preview.orderNumber,
-              input.email,
+          try {
+            verifyRefundPostcondition(verified, input.preview.lineNumbers);
+          } catch {
+            throw new UnknownWriteOutcomeError(
+              "AMC refund outcome remains unknown; refund will not be redispatched",
             );
-            try {
-              verifyRefundPostcondition(verified, input.preview.lineNumbers);
-            } catch {
-              throw new UnknownWriteOutcomeError(
-                "AMC refund outcome remains unknown; refund will not be redispatched",
-              );
-            }
-            await journal.saveRefund({
-              ...existing,
-              state: "REFUND_OBSERVED",
-              updatedAt: this.now().toISOString(),
-            });
-            return {
-              orderId: input.preview.orderToken,
-              status: verified.status,
-              refundTotal: existing.refundTotal,
-              nonRefundableFee: existing.nonRefundableFee,
-              reconciled: true,
-            };
           }
-          const attempt: RefundAttempt = existing ?? {
-            version: 1,
-            state: "REFUND_PREPARED",
-            orderToken: input.preview.orderToken,
-            orderNumber: input.preview.orderNumber,
-            lineNumbers: [...input.preview.lineNumbers],
+          await rec.pending.clear("refund", key);
+          return {
+            orderId: input.preview.orderToken,
+            status: verified.status,
             refundTotal: input.preview.refundTotal,
             nonRefundableFee: input.preview.nonRefundableFee,
-            updatedAt: this.now().toISOString(),
+            reconciled: true,
           };
-          return this.submitRefundLocked(input, journal, attempt);
-        },
-      );
+        }
+        return this.submitRefundLocked(input, rec, key);
+      });
     });
   }
 
   private async submitRefundLocked(
     input: { preview: RefundPreview; confirmationToken: string; email: string },
-    journal?: CheckoutJournal,
-    attempt?: RefundAttempt,
+    rec?: CheckoutRecovery,
+    key?: string,
   ): Promise<{
     orderId: string;
     status: "REFUND_REQUESTED" | "REFUNDED";
@@ -1165,11 +1192,12 @@ export class AmcCommerceService {
       this.now(),
     );
     assertRefundMatchesPreview(currentPreview, input.preview);
-    if (journal && attempt) {
-      await journal.saveRefund({
-        ...attempt,
-        state: "REFUND_DISPATCHING",
-        updatedAt: this.now().toISOString(),
+    if (rec && key) {
+      await rec.pending.mark({
+        operation: "refund",
+        key,
+        intentHash: sha256(key),
+        dispatchedAt: this.now().toISOString(),
       });
     }
 
@@ -1196,21 +1224,17 @@ export class AmcCommerceService {
         reconciled = true;
       } catch {
         if (error instanceof AmbiguousWriteError) {
+          // Keep the marker: a later submit reconciles from provider truth.
           throw new UnknownWriteOutcomeError(
             "AMC refund outcome remains unknown after reconciliation",
           );
         }
+        if (rec && key) await rec.pending.clear("refund", key);
         throw error;
       }
     }
     verifyRefundPostcondition(verified, input.preview.lineNumbers);
-    if (journal && attempt) {
-      await journal.saveRefund({
-        ...attempt,
-        state: "REFUND_OBSERVED",
-        updatedAt: this.now().toISOString(),
-      });
-    }
+    if (rec && key) await rec.pending.clear("refund", key);
     return {
       orderId,
       status: verified.status,
@@ -1252,15 +1276,12 @@ function isMissingCartIntent(error: unknown): boolean {
 }
 
 function assertCheckoutSessionOwner(
-  attempt: CheckoutAttempt,
+  record: { checkoutSessionId?: string },
   checkoutSessionId: string | undefined,
 ): void {
-  if (
-    checkoutSessionId === undefined &&
-    attempt.checkoutSessionId === undefined
-  )
+  if (checkoutSessionId === undefined && record.checkoutSessionId === undefined)
     return;
-  if (attempt.checkoutSessionId !== checkoutSessionId)
+  if (record.checkoutSessionId !== checkoutSessionId)
     throw new CheckoutSessionOwnershipError();
 }
 

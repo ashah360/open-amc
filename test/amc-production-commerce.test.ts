@@ -30,6 +30,7 @@ import {
   AmcCapabilityUnavailableError,
   CartCreateIntent,
   CartSnapshot,
+  OrderLifecycle,
   PurchaseResult,
   RefundOrderSnapshot,
 } from "../src/commerce/executor";
@@ -349,6 +350,9 @@ class FakeProjectionProvider implements AmcCommerceProjectionProvider {
   assertReady(): void {}
   inspectCart(): Promise<CartSnapshot> {
     return Promise.resolve(structuredClone(this.cart));
+  }
+  projectLifecycle(): Promise<OrderLifecycle> {
+    return Promise.resolve({ kind: "open", cart: structuredClone(this.cart) });
   }
   reconcileCart(_intent: CartCreateIntent): Promise<CartSnapshot | null> {
     return Promise.resolve(structuredClone(this.cart));

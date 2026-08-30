@@ -43,14 +43,15 @@ import {
   PurchaseResult,
   RefundOrderSnapshot,
 } from "../src/commerce/executor";
-import {
-  CheckoutAttempt,
-  CheckoutJournal,
-  FileCheckoutJournal,
-} from "../src/commerce/checkout-journal";
+import { OrderLifecycle } from "../src/commerce/executor";
+import { AmcCommerceProjectionProvider } from "../src/commerce/graphql-executor";
+import { CartIntentStore } from "../src/commerce/cart-intent-store";
+import { PendingWriteStore } from "../src/commerce/pending-write-store";
 import {
   AmcCommerceService,
   CartHoldWithoutSnapshotError,
+  CheckoutRecovery,
+  CheckoutSettlingError,
   ConfirmationMismatchError,
   ConsequenceMismatchError,
   SingleFlightError,
@@ -188,6 +189,7 @@ describe("AMC consequential commerce lifecycle", () => {
     const executor = new FakeCommerceExecutor();
     const service = new AmcCommerceService({
       executor,
+      projections: new FakeProjectionProvider(),
       payment: new FakePaymentExecutor(),
       readiness: {
         assertReady: () =>
@@ -437,61 +439,6 @@ describe("AMC consequential commerce lifecycle", () => {
     expect(executor.inspectCalls).toBe(4);
   });
 
-  it("journals challenge fulfillment and never dispatches it twice after failure", async () => {
-    const executor = new FakeCommerceExecutor();
-    const direct = new FakePaymentExecutor();
-    const challenge = new FakePaymentExecutor();
-    const journal = new MemoryCheckoutJournal();
-    journal.record = {
-      version: 1,
-      attemptId: journal.attemptId(createIntent()),
-      state: "CART_OPEN",
-      intent: createIntent(),
-      orderToken: executor.cart.orderToken,
-      updatedAt: "2030-01-15T08:29:00.000Z",
-    };
-    const service = new AmcCommerceService({
-      executor,
-      payment: direct,
-      challengePayment: challenge,
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-    const checkout = await service.previewCheckout({
-      orderToken: executor.cart.orderToken,
-      email: "guest@example.test",
-    });
-    const preview = await service.previewCheckoutChallenge({
-      checkoutPreview: checkout,
-      email: "guest@example.test",
-    });
-    if (preview.kind !== "checkout-challenge")
-      throw new Error("expected challenge preview");
-    challenge.purchaseError = new Error("challenge response lost");
-
-    await expect(
-      service.submitCheckoutChallenge({
-        preview,
-        confirmationToken: preview.confirmationToken,
-        email: "guest@example.test",
-        vaultPointer: "vault://test-card",
-      }),
-    ).rejects.toThrow("challenge response lost");
-    expect(journal.record?.state).toBe("PURCHASE_CHALLENGE_DISPATCHING");
-    const dispatches = challenge.purchaseCalls;
-
-    challenge.purchaseError = null;
-    await expect(
-      service.submitCheckoutChallenge({
-        preview,
-        confirmationToken: preview.confirmationToken,
-        email: "guest@example.test",
-        vaultPointer: "vault://test-card",
-      }),
-    ).rejects.toBeInstanceOf(UnknownWriteOutcomeError);
-    expect(challenge.purchaseCalls).toBe(dispatches);
-  });
-
   it("shows full and partial refund consequences without claiming the fee is refundable", async () => {
     const executor = new FakeCommerceExecutor();
     const service = serviceWith(executor);
@@ -556,604 +503,6 @@ describe("AMC consequential commerce lifecycle", () => {
     expect(executor.refundCalls).toBe(1);
   });
 
-  it("journals cart dispatch before the write and blocks redispatch after an unknown result", async () => {
-    const executor = new FakeCommerceExecutor();
-    const journal = new MemoryCheckoutJournal();
-    executor.createError = new Error("post-dispatch projection failed");
-    const service = new AmcCommerceService({
-      executor,
-      payment: new FakePaymentExecutor(),
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-
-    await expect(service.createCart(createIntent())).rejects.toThrow(
-      "post-dispatch projection failed",
-    );
-    expect(journal.record?.state).toBe("UNKNOWN");
-    expect(journal.states.slice(0, 3)).toEqual([
-      "PREPARED",
-      "CART_DISPATCHING",
-      "UNKNOWN",
-    ]);
-
-    executor.createError = null;
-    await expect(service.createCart(createIntent())).rejects.toBeInstanceOf(
-      UnknownWriteOutcomeError,
-    );
-    expect(executor.createCalls).toBe(1);
-  });
-
-  it("throws a typed cart-hold error with the known token when projection fails after token receipt", async () => {
-    const executor = new FakeCommerceExecutor();
-    const journal = new MemoryCheckoutJournal();
-    // CartCreateOrder succeeds and reports the token, then the projection read
-    // fails — the exact live River East B13/B14 shape.
-    executor.reportTokenBeforeError = true;
-    executor.createError = new Error("AMC order projection error");
-    const service = new AmcCommerceService({
-      executor,
-      payment: new FakePaymentExecutor(),
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-
-    const failure = await service
-      .createCart(createIntent())
-      .catch((error: unknown) => error);
-
-    // Typed, exact recovery — NOT a generic "unknown outcome".
-    expect(failure).toBeInstanceOf(CartHoldWithoutSnapshotError);
-    expect(failure).toMatchObject({
-      code: "AMC_CART_HOLD_UNCONFIRMED",
-      operation: "cart",
-      reconciliation: {
-        orderToken: executor.cart.orderToken,
-        showtimeId: "900000005",
-        seatNames: ["H7", "H8"],
-      },
-    });
-    expect((failure as Error).message).toContain("release");
-    expect((failure as Error).message).not.toMatch(/unknown/i);
-    // Exactly one cart mutation, and the durable journal holds the token.
-    expect(executor.createCalls).toBe(1);
-    expect(journal.record).toMatchObject({
-      state: "CART_TOKEN_RECEIVED",
-      orderToken: executor.cart.orderToken,
-    });
-
-    // A later process/same session can release that exact token with NO second
-    // cart mutation, and the journal terminalizes to RELEASED.
-    executor.createError = null;
-    await expect(
-      service.releaseCart(executor.cart.orderToken),
-    ).resolves.toEqual({ released: true });
-    expect(executor.createCalls).toBe(1);
-    expect(executor.deleteCalls).toBe(1);
-    expect(journal.record?.state).toBe("RELEASED");
-  });
-
-  it("recovers a stranded token across processes via the default on-disk journal", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "amc-xproc-journal-"));
-    journalRoots.push(root);
-    const now = () => new Date("2030-01-15T08:30:00.000Z");
-
-    // Process 1: a real FileCheckoutJournal (the CLI default) backed by a
-    // FileSessionStore. CartCreateOrder reports the token, then projection
-    // fails -> typed cart-hold error and a durable on-disk journal entry.
-    const executor1 = new FakeCommerceExecutor();
-    executor1.reportTokenBeforeError = true;
-    executor1.createError = new Error("AMC order projection error");
-    const service1 = new AmcCommerceService({
-      executor: executor1,
-      payment: new FakePaymentExecutor(),
-      journal: new FileCheckoutJournal(new FileSessionStore({ root })),
-      now,
-    });
-    const failure = await service1
-      .createCart(createIntent())
-      .catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(CartHoldWithoutSnapshotError);
-    expect(
-      (failure as CartHoldWithoutSnapshotError).reconciliation.orderToken,
-    ).toBe(executor1.cart.orderToken);
-    expect(executor1.createCalls).toBe(1);
-
-    // Process 2: a brand-new service + brand-new FileCheckoutJournal over the
-    // SAME store root reads the persisted token and releases it with ZERO cart
-    // mutations, terminalizing the journal.
-    const executor2 = new FakeCommerceExecutor();
-    const journal2 = new FileCheckoutJournal(new FileSessionStore({ root }));
-    const service2 = new AmcCommerceService({
-      executor: executor2,
-      payment: new FakePaymentExecutor(),
-      journal: journal2,
-      now,
-    });
-
-    await expect(
-      service2.releaseCart(executor1.cart.orderToken),
-    ).resolves.toEqual({ released: true });
-    expect(executor2.createCalls).toBe(0);
-    expect(executor2.deleteCalls).toBe(1);
-    expect(
-      (await journal2.loadByOrderToken(executor1.cart.orderToken))?.state,
-    ).toBe("RELEASED");
-  });
-
-  it("journals one owner-scoped cart release and does not dispatch it twice", async () => {
-    const executor = new FakeCommerceExecutor();
-    const journal = new MemoryCheckoutJournal();
-    const service = new AmcCommerceService({
-      executor,
-      payment: new FakePaymentExecutor(),
-      readiness: { assertReady: async () => undefined },
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-    const owner = new AmcCheckoutSession(service, "conversation-a");
-    const foreign = new AmcCheckoutSession(service, "conversation-b");
-    const created = await owner.createCart(createIntent());
-
-    await expect(
-      foreign.releaseCart(created.orderToken),
-    ).rejects.toBeInstanceOf(CheckoutSessionOwnershipError);
-    await expect(owner.releaseCart(created.orderToken)).resolves.toEqual({
-      released: true,
-    });
-    expect(journal.record?.state).toBe("RELEASED");
-    expect(executor.deleteCalls).toBe(1);
-    await expect(owner.releaseCart(created.orderToken)).resolves.toEqual({
-      released: true,
-    });
-    expect(executor.deleteCalls).toBe(1);
-  });
-
-  it("allows a fresh owner to retry the same intent after confirmed release", async () => {
-    const executor = new FakeCommerceExecutor();
-    const journal = new MemoryCheckoutJournal();
-    const service = new AmcCommerceService({
-      executor,
-      payment: new FakePaymentExecutor(),
-      readiness: { assertReady: async () => undefined },
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-    const first = new AmcCheckoutSession(service, "conversation-a");
-    const second = new AmcCheckoutSession(service, "conversation-b");
-    const created = await first.createCart(createIntent());
-    await first.releaseCart(created.orderToken);
-
-    await expect(second.createCart(createIntent())).resolves.toMatchObject({
-      status: "OPEN",
-    });
-    expect(executor.createCalls).toBe(2);
-    expect(journal.record?.checkoutSessionId).toBe("conversation-b");
-  });
-
-  it("never redispatches OrderDelete after an ambiguous release", async () => {
-    const executor = new FakeCommerceExecutor();
-    const journal = new MemoryCheckoutJournal();
-    const releasedBindings: string[] = [];
-    const service = new AmcCommerceService({
-      executor,
-      payment: new FakePaymentExecutor(),
-      readiness: {
-        assertReady: async () => undefined,
-        release: async (binding) => {
-          releasedBindings.push(binding);
-        },
-      },
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-    const owner = new AmcCheckoutSession(service, "conversation-a");
-    const created = await owner.createCart(createIntent());
-    executor.deleteError = new AmbiguousWriteError("release");
-
-    await expect(owner.releaseCart(created.orderToken)).rejects.toBeInstanceOf(
-      UnknownWriteOutcomeError,
-    );
-    expect(journal.record?.state).toBe("RELEASE_DISPATCHING");
-    expect(releasedBindings).toEqual([created.orderToken]);
-    expect(executor.deleteCalls).toBe(1);
-    executor.deleteError = null;
-    await expect(owner.releaseCart(created.orderToken)).rejects.toBeInstanceOf(
-      UnknownWriteOutcomeError,
-    );
-    expect(executor.deleteCalls).toBe(1);
-  });
-
-  it("allows durable cart recovery by a new wrapper with the same checkout session", async () => {
-    const executor = new FakeCommerceExecutor();
-    const journal = new MemoryCheckoutJournal();
-    const service = new AmcCommerceService({
-      executor,
-      payment: new FakePaymentExecutor(),
-      readiness: { assertReady: async () => undefined },
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-    await new AmcCheckoutSession(service, "conversation-a").createCart(
-      createIntent(),
-    );
-    const restarted = new AmcCheckoutSession(service, "conversation-a");
-
-    await expect(
-      restarted.recoverCheckout({
-        showtimeId: executor.cart.showtimeId,
-        seatNames: executor.cart.seats.map((seat) => seat.name),
-        email: "guest@example.test",
-      }),
-    ).resolves.toMatchObject({ kind: "cart" });
-    expect(restarted.owns(executor.cart.orderToken)).toBe(true);
-  });
-
-  it("refuses durable cart recovery from a different checkout session", async () => {
-    const executor = new FakeCommerceExecutor();
-    const journal = new MemoryCheckoutJournal();
-    const service = new AmcCommerceService({
-      executor,
-      payment: new FakePaymentExecutor(),
-      readiness: { assertReady: async () => undefined },
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-    const first = new AmcCheckoutSession(service, "conversation-a");
-    const second = new AmcCheckoutSession(service, "conversation-b");
-    await first.createCart(createIntent());
-
-    await expect(
-      second.recoverCheckout({
-        showtimeId: executor.cart.showtimeId,
-        seatNames: executor.cart.seats.map((seat) => seat.name),
-        email: "guest@example.test",
-      }),
-    ).rejects.toBeInstanceOf(CheckoutSessionOwnershipError);
-  });
-
-  it("recovers a journaled selection before inventory lookup or cart creation", async () => {
-    const executor = new FakeCommerceExecutor();
-    const payment = new FakePaymentExecutor();
-    const journal = new MemoryCheckoutJournal();
-    journal.record = {
-      version: 1,
-      attemptId: journal.attemptId(createIntent()),
-      state: "CART_TOKEN_RECEIVED",
-      intent: createIntent(),
-      orderToken: executor.cart.orderToken,
-      updatedAt: "2030-01-15T08:29:00.000Z",
-    };
-    const service = new AmcCommerceService({
-      executor,
-      payment,
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-
-    await expect(
-      service.recoverCheckout({
-        showtimeId: createIntent().showtimeId,
-        seatNames: ["H7", "H8"],
-        email: "guest@example.test",
-      }),
-    ).resolves.toMatchObject({
-      kind: "cart",
-      cart: { orderToken: executor.cart.orderToken },
-    });
-    expect(executor.createCalls).toBe(0);
-    expect(executor.inspectCalls).toBe(1);
-    expect(payment.reconcileCalls).toBe(1);
-  });
-
-  it("recovers a purchase against the authoritative cart total, not the pre-cart estimate", async () => {
-    // Pre-cart estimate 56.04; authoritative created-cart total 51.93 was
-    // journaled at CART_OPEN. A recovered purchase charged the authoritative
-    // 51.93 must be accepted; the stale 56.04 must be rejected.
-    const executor = new FakeCommerceExecutor();
-    const payment = new FakePaymentExecutor();
-    const journal = new MemoryCheckoutJournal();
-    const estimateIntent = {
-      ...createIntent(),
-      expectedTotal: "56.04" as const,
-    };
-    journal.record = {
-      version: 1,
-      attemptId: journal.attemptId(estimateIntent),
-      state: "PURCHASE_DISPATCHING",
-      intent: estimateIntent,
-      orderToken: executor.cart.orderToken,
-      cartTotal: "51.93",
-      updatedAt: "2030-01-15T08:29:00.000Z",
-    };
-    payment.reconciledPurchase = {
-      orderToken: executor.cart.orderToken,
-      confirmationNumber: "0000000002",
-      chargedTotal: "51.93",
-      status: "CONFIRMED",
-    };
-    const service = new AmcCommerceService({
-      executor,
-      payment,
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-
-    await expect(
-      service.recoverCheckout({
-        showtimeId: estimateIntent.showtimeId,
-        seatNames: ["H7", "H8"],
-        email: "guest@example.test",
-      }),
-    ).resolves.toMatchObject({
-      kind: "confirmed",
-      purchase: { chargedTotal: "51.93", reconciled: true },
-    });
-
-    // A purchase that charged the stale pre-cart estimate is rejected.
-    payment.reconciledPurchase = {
-      orderToken: executor.cart.orderToken,
-      confirmationNumber: "0000000003",
-      chargedTotal: "56.04",
-      status: "CONFIRMED",
-    };
-    journal.record = {
-      version: 1,
-      attemptId: journal.attemptId(estimateIntent),
-      state: "PURCHASE_DISPATCHING",
-      intent: estimateIntent,
-      orderToken: executor.cart.orderToken,
-      cartTotal: "51.93",
-      updatedAt: "2030-01-15T08:29:00.000Z",
-    };
-    await expect(
-      service.recoverCheckout({
-        showtimeId: estimateIntent.showtimeId,
-        seatNames: ["H7", "H8"],
-        email: "guest@example.test",
-      }),
-    ).rejects.toBeInstanceOf(ConsequenceMismatchError);
-  });
-
-  it("recovers a known open cart token without creating another hold", async () => {
-    const executor = new FakeCommerceExecutor();
-    const journal = new MemoryCheckoutJournal();
-    journal.record = {
-      version: 1,
-      attemptId: journal.attemptId(createIntent()),
-      state: "CART_OPEN",
-      intent: createIntent(),
-      orderToken: executor.cart.orderToken,
-      updatedAt: "2030-01-15T08:29:00.000Z",
-    };
-    const service = new AmcCommerceService({
-      executor,
-      payment: new FakePaymentExecutor(),
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-
-    await expect(service.createCart(createIntent())).resolves.toMatchObject({
-      orderToken: executor.cart.orderToken,
-    });
-    expect(executor.createCalls).toBe(0);
-    expect(executor.inspectCalls).toBe(1);
-  });
-
-  it("reconciles a purchase-dispatching journal without fulfilling again", async () => {
-    const executor = new FakeCommerceExecutor();
-    const payment = new FakePaymentExecutor();
-    const journal = new MemoryCheckoutJournal();
-    const service = new AmcCommerceService({
-      executor,
-      payment,
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-    const preview = await service.previewCheckout({
-      orderToken: executor.cart.orderToken,
-      email: "guest@example.test",
-    });
-    journal.record = {
-      version: 1,
-      attemptId: journal.attemptId(createIntent()),
-      state: "PURCHASE_DISPATCHING",
-      intent: createIntent(),
-      orderToken: executor.cart.orderToken,
-      updatedAt: "2030-01-15T08:29:00.000Z",
-    };
-    payment.reconciledPurchase = {
-      orderToken: executor.cart.orderToken,
-      confirmationNumber: "0000000001",
-      chargedTotal: "55.56",
-      status: "CONFIRMED",
-    };
-
-    await expect(
-      service.submitCheckout({
-        preview,
-        confirmationToken: preview.confirmationToken,
-        email: "guest@example.test",
-        vaultPointer: "vault://private-card",
-      }),
-    ).resolves.toMatchObject({
-      confirmationNumber: "0000000001",
-      reconciled: true,
-    });
-    expect(payment.purchaseCalls).toBe(0);
-    expect(payment.reconcileCalls).toBe(1);
-    expect(journal.record).toMatchObject({
-      state: "CONFIRMED",
-      confirmationNumber: "0000000001",
-      chargedTotal: "55.56",
-    });
-  });
-
-  it("terminally records an expired unpaid fulfillment and permits a later fresh cart", async () => {
-    const executor = new FakeCommerceExecutor();
-    const payment = new FakePaymentExecutor();
-    const journal = new MemoryCheckoutJournal();
-    const service = new AmcCommerceService({
-      executor,
-      payment,
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-    const preview = await service.previewCheckout({
-      orderToken: executor.cart.orderToken,
-      email: "guest@example.test",
-    });
-    journal.record = {
-      version: 1,
-      attemptId: journal.attemptId(createIntent()),
-      state: "PURCHASE_DISPATCHING",
-      intent: createIntent(),
-      orderToken: executor.cart.orderToken,
-      updatedAt: "2030-01-15T08:29:00.000Z",
-    };
-    payment.reconcileError = new PurchaseNotCompletedError("Expired");
-
-    await expect(
-      service.submitCheckout({
-        preview,
-        confirmationToken: preview.confirmationToken,
-        email: "guest@example.test",
-        vaultPointer: "vault://test-card",
-      }),
-    ).rejects.toBeInstanceOf(PurchaseNotCompletedError);
-    expect(payment.purchaseCalls).toBe(0);
-    expect(journal.record?.state).toBe("NOT_PURCHASED");
-
-    payment.reconcileError = null;
-    await expect(service.createCart(createIntent())).resolves.toMatchObject({
-      status: "OPEN",
-    });
-    expect(executor.createCalls).toBe(1);
-  });
-
-  it("records a direct conclusive no-purchase as terminal", async () => {
-    const executor = new FakeCommerceExecutor();
-    const payment = new FakePaymentExecutor();
-    const journal = new MemoryCheckoutJournal();
-    const service = new AmcCommerceService({
-      executor,
-      payment,
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-    const preview = await service.previewCheckout({
-      orderToken: executor.cart.orderToken,
-      email: "guest@example.test",
-    });
-    journal.record = {
-      version: 1,
-      attemptId: journal.attemptId(createIntent()),
-      state: "CART_OPEN",
-      intent: createIntent(),
-      orderToken: executor.cart.orderToken,
-      updatedAt: "2030-01-15T08:29:00.000Z",
-    };
-    payment.purchaseError = new PurchaseNotCompletedError("Expired");
-
-    await expect(
-      service.submitCheckout({
-        preview,
-        confirmationToken: preview.confirmationToken,
-        email: "guest@example.test",
-        vaultPointer: "vault://test-card",
-      }),
-    ).rejects.toBeInstanceOf(PurchaseNotCompletedError);
-    expect(payment.reconcileCalls).toBe(0);
-    expect(journal.record?.state).toBe("NOT_PURCHASED");
-  });
-
-  it("leaves purchase dispatch durable and never retries a failed fulfillment blindly", async () => {
-    const executor = new FakeCommerceExecutor();
-    const payment = new FakePaymentExecutor();
-    const journal = new MemoryCheckoutJournal();
-    const service = new AmcCommerceService({
-      executor,
-      payment,
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-    const preview = await service.previewCheckout({
-      orderToken: executor.cart.orderToken,
-      email: "guest@example.test",
-    });
-    journal.record = {
-      version: 1,
-      attemptId: journal.attemptId(createIntent()),
-      state: "CART_OPEN",
-      intent: createIntent(),
-      orderToken: executor.cart.orderToken,
-      updatedAt: "2030-01-15T08:29:00.000Z",
-    };
-    payment.purchaseError = new Error("connection lost after dispatch");
-
-    await expect(
-      service.submitCheckout({
-        preview,
-        confirmationToken: preview.confirmationToken,
-        email: "guest@example.test",
-        vaultPointer: "vault://private-card",
-      }),
-    ).rejects.toThrow("connection lost after dispatch");
-    expect(journal.record?.state).toBe("PURCHASE_DISPATCHING");
-    const firstPurchaseCalls = payment.purchaseCalls;
-
-    payment.purchaseError = null;
-    await expect(
-      service.submitCheckout({
-        preview,
-        confirmationToken: preview.confirmationToken,
-        email: "guest@example.test",
-        vaultPointer: "vault://private-card",
-      }),
-    ).rejects.toBeInstanceOf(UnknownWriteOutcomeError);
-    expect(payment.purchaseCalls).toBe(firstPurchaseCalls);
-  });
-
-  it("journals refund dispatch and never resubmits after post-write projection failure", async () => {
-    const executor = new FakeCommerceExecutor();
-    const journal = new MemoryCheckoutJournal();
-    const service = new AmcCommerceService({
-      executor,
-      payment: new FakePaymentExecutor(),
-      journal,
-      now: () => new Date("2030-01-15T08:30:00.000Z"),
-    });
-    const preview = await service.previewRefund({
-      orderNumber: "0000000001",
-      email: "guest@example.test",
-      lineNumbers: ["1", "2"],
-    });
-    executor.searchResults.push(
-      refundableOrder(),
-      new Error("post-refund projection failed"),
-    );
-
-    await expect(
-      service.submitRefund({
-        preview,
-        confirmationToken: preview.confirmationToken,
-        email: "guest@example.test",
-      }),
-    ).rejects.toThrow("post-refund projection failed");
-    expect(journal.refundRecord?.state).toBe("REFUND_DISPATCHING");
-    const firstDispatches = executor.refundCalls;
-
-    executor.searchResults.push(refundableOrder());
-    await expect(
-      service.submitRefund({
-        preview,
-        confirmationToken: preview.confirmationToken,
-        email: "guest@example.test",
-      }),
-    ).rejects.toBeInstanceOf(UnknownWriteOutcomeError);
-    expect(executor.refundCalls).toBe(firstDispatches);
-  });
-
   it("binds prepared payment material when ambiguous cart creation reconciles to a token", async () => {
     const executor = new FakeCommerceExecutor();
     executor.createError = new AmbiguousWriteError("cart");
@@ -1161,6 +510,7 @@ describe("AMC consequential commerce lifecycle", () => {
     const bindings: Array<{ binding: string; orderToken: string }> = [];
     const service = new AmcCommerceService({
       executor,
+      projections: new FakeProjectionProvider(),
       payment: new FakePaymentExecutor(),
       readiness: {
         assertReady: async () => undefined,
@@ -1308,94 +658,6 @@ describe("AMC browser-backed execution boundaries", () => {
   });
 });
 
-class MemoryCheckoutJournal implements CheckoutJournal {
-  record: CheckoutAttempt | null = null;
-  refundRecord:
-    import("../src/commerce/checkout-journal").RefundAttempt | null = null;
-  readonly states: string[] = [];
-
-  attemptId(_intent: CartCreateIntent): string {
-    return "a".repeat(64);
-  }
-  load(): Promise<CheckoutAttempt | null> {
-    return Promise.resolve(this.record ? structuredClone(this.record) : null);
-  }
-  loadByMutation(): Promise<CheckoutAttempt | null> {
-    return Promise.resolve(this.record ? structuredClone(this.record) : null);
-  }
-  loadByOrderToken(orderToken: string): Promise<CheckoutAttempt | null> {
-    return Promise.resolve(
-      this.record?.orderToken === orderToken
-        ? structuredClone(this.record)
-        : null,
-    );
-  }
-  loadBySelection(
-    showtimeId: string,
-    seatNames: string[],
-  ): Promise<CheckoutAttempt | null> {
-    const record = this.record;
-    const matches =
-      record?.intent.showtimeId === showtimeId &&
-      record.intent.seats.length === seatNames.length &&
-      record.intent.seats
-        .map((seat) => seat.name)
-        .sort()
-        .every((name, index) => name === [...seatNames].sort()[index]);
-    return Promise.resolve(matches && record ? structuredClone(record) : null);
-  }
-  loadRefund(): Promise<
-    import("../src/commerce/checkout-journal").RefundAttempt | null
-  > {
-    return Promise.resolve(
-      this.refundRecord ? structuredClone(this.refundRecord) : null,
-    );
-  }
-  saveRefund(
-    attempt: import("../src/commerce/checkout-journal").RefundAttempt,
-  ): Promise<void> {
-    this.refundRecord = structuredClone(attempt);
-    this.states.push(attempt.state);
-    return Promise.resolve();
-  }
-  withRefundLock<T>(
-    _orderToken: string,
-    _lineNumbers: string[],
-    fn: () => Promise<T>,
-  ): Promise<T> {
-    return fn();
-  }
-  resetReleased(attempt: CheckoutAttempt): Promise<void> {
-    if (
-      this.record?.attemptId === attempt.attemptId &&
-      this.record.state === "RELEASED"
-    ) {
-      this.record = null;
-    }
-    return Promise.resolve();
-  }
-  resetNotPurchased(attempt: CheckoutAttempt): Promise<void> {
-    if (
-      this.record?.attemptId === attempt.attemptId &&
-      this.record.state === "NOT_PURCHASED"
-    ) {
-      this.record = null;
-    }
-    return Promise.resolve();
-  }
-  save(attempt: CheckoutAttempt): Promise<void> {
-    this.record = structuredClone(attempt);
-    this.states.push(attempt.state);
-    return Promise.resolve();
-  }
-  withIntentLock<T>(
-    _intent: CartCreateIntent,
-    fn: () => Promise<T>,
-  ): Promise<T> {
-    return fn();
-  }
-}
-
 class FakeCommerceExecutor implements CommerceExecutor {
   createCalls = 0;
   inspectCalls = 0;
@@ -1536,6 +798,35 @@ class FakePaymentExecutor implements PaymentExecutor {
   }
 }
 
+class FakeProjectionProvider implements AmcCommerceProjectionProvider {
+  lifecycle: OrderLifecycle = { kind: "open" };
+  assertReady(): void {}
+  inspectCart(): Promise<CartSnapshot> {
+    return Promise.reject(new Error("not used"));
+  }
+  projectLifecycle(): Promise<OrderLifecycle> {
+    return Promise.resolve(this.lifecycle);
+  }
+  reconcileCart(): Promise<CartSnapshot | null> {
+    return Promise.resolve(null);
+  }
+  projectRefundOrder(): Promise<RefundOrderSnapshot> {
+    return Promise.reject(new Error("not used"));
+  }
+  projectPurchase(): Promise<PurchaseResult> {
+    return Promise.reject(new Error("not used"));
+  }
+  reconcilePurchase(): Promise<PurchaseResult | null> {
+    return Promise.resolve(null);
+  }
+  projectExpiration(): Promise<{ expiresAt: string }> {
+    return Promise.resolve({ expiresAt: "2030-01-15T08:45:00.000Z" });
+  }
+  projectStatus(): Promise<"OPEN" | "FULFILLED" | "EXPIRED"> {
+    return Promise.resolve("OPEN");
+  }
+}
+
 function serviceWith(
   executor: CommerceExecutor,
   payment: PaymentExecutor = new FakePaymentExecutor(),
@@ -1543,10 +834,20 @@ function serviceWith(
 ): AmcCommerceService {
   return new AmcCommerceService({
     executor,
+    projections: new FakeProjectionProvider(),
     payment,
     ...(challengePayment ? { challengePayment } : {}),
     now: () => new Date("2030-01-15T08:30:00.000Z"),
   });
+}
+
+/** In-memory recovery bundle for behavioral recovery tests. */
+function memoryRecovery(store: FileSessionStore): CheckoutRecovery {
+  return {
+    intents: new CartIntentStore(store),
+    pending: new PendingWriteStore(store),
+    store,
+  };
 }
 
 function createIntent(): CartCreateIntent {

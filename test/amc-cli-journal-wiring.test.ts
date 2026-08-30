@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { runAmcCli, AmcCliCapabilities } from "../src/cli";
 import type { AmcClient, AmcClientConfig } from "../src/client";
-import {
-  CheckoutJournal,
-  FileCheckoutJournal,
-} from "../src/commerce/checkout-journal";
+import { CartIntentStore } from "../src/commerce/cart-intent-store";
+import { PendingWriteStore } from "../src/commerce/pending-write-store";
+import type { CheckoutRecovery } from "../src/commerce/service";
 
 function stubClient(): AmcClient {
   return {
@@ -51,18 +50,20 @@ async function captureConfig(
   return captured;
 }
 
-describe("CLI checkout journal wiring", () => {
-  it("wires a durable FileCheckoutJournal by default (no capability module)", async () => {
+describe("CLI checkout recovery wiring", () => {
+  it("wires a durable recovery bundle (intent store + uncertainty ledger) by default", async () => {
     const config = await captureConfig();
-    expect(config.checkout?.recovery).toBeInstanceOf(FileCheckoutJournal);
+    expect(config.checkout?.recovery?.intents).toBeInstanceOf(CartIntentStore);
+    expect(config.checkout?.recovery?.pending).toBeInstanceOf(
+      PendingWriteStore,
+    );
   });
 
-  it("lets a capability-supplied recovery journal override the built-in default", async () => {
+  it("lets a capability-supplied recovery bundle override the built-in default", async () => {
     const supplied = {
-      marker: "capability-journal",
-    } as unknown as CheckoutJournal;
+      marker: "capability-recovery",
+    } as unknown as CheckoutRecovery;
     const config = await captureConfig({ recovery: supplied });
     expect(config.checkout?.recovery).toBe(supplied);
-    expect(config.checkout?.recovery).not.toBeInstanceOf(FileCheckoutJournal);
   });
 });

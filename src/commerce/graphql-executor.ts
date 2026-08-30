@@ -35,6 +35,7 @@ import {
   CartSnapshot,
   CommerceExecutor,
   Money,
+  OrderLifecycle,
   PurchaseResult,
   RefundOrderSnapshot,
   WriteChallengedError,
@@ -75,6 +76,14 @@ export interface AmcCommerceProjectionProvider {
     email?: string,
     intent?: CartCreateIntent,
   ): Promise<CartSnapshot>;
+  /**
+   * Decide an order's current lifecycle from ONE fresh projection. The provider
+   * order is the sole source of truth the commerce layer consults.
+   */
+  projectLifecycle(
+    orderToken: string,
+    opts: { intent?: CartCreateIntent; now: Date },
+  ): Promise<OrderLifecycle>;
   reconcileCart(intent: CartCreateIntent): Promise<CartSnapshot | null>;
   projectRefundOrder(input: {
     orderNumber: string;
@@ -101,6 +110,9 @@ export class MissingAmcCommerceProjectionProvider implements AmcCommerceProjecti
     throw new AmcCommerceProjectionSetupError();
   }
   inspectCart(): Promise<CartSnapshot> {
+    return Promise.reject(new AmcCommerceProjectionSetupError());
+  }
+  projectLifecycle(): Promise<OrderLifecycle> {
     return Promise.reject(new AmcCommerceProjectionSetupError());
   }
   reconcileCart(): Promise<CartSnapshot | null> {

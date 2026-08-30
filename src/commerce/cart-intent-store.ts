@@ -118,6 +118,78 @@ function seatNamesOf(intent: CartCreateIntent): string[] {
   return intent.seats.map((seat) => seat.name);
 }
 
+/**
+ * The subset of legacy checkout-journal states this transitional migrator maps.
+ * The old transition engine is gone; this is a read-only decoder that lets an
+ * in-flight legacy hold (e.g. an A9-style PURCHASE_DISPATCHING record on a real
+ * user's disk) resolve under the new provider-authoritative model.
+ */
+export interface LegacyCheckoutAttempt {
+  orderToken: string;
+  intent: CartCreateIntent;
+  state: string;
+  updatedAt: string;
+}
+
+/**
+ * Lazily read a legacy journal record for a given order token from the raw
+ * SessionStore, WITHOUT deleting the legacy bytes. Returns the intent + last
+ * legacy state so the caller can seed the new stores and let the provider
+ * decide. Returns null when no legacy record exists; throws the typed corrupt
+ * error on a tampered alias/record.
+ */
+export async function readLegacyAttemptByToken(
+  store: SessionStore,
+  orderToken: string,
+): Promise<LegacyCheckoutAttempt | null> {
+  if (!nonEmpty(orderToken)) throw new RecoveryStoreCorruptError();
+  const aliasBytes = await store.load({
+    provider: "amc-checkout-order",
+    account: sha256(orderToken),
+  });
+  if (aliasBytes === null) return null;
+  let alias: unknown;
+  try {
+    alias = JSON.parse(Buffer.from(aliasBytes).toString("utf8"));
+  } catch {
+    throw new RecoveryStoreCorruptError();
+  }
+  if (
+    !isRecord(alias) ||
+    alias.version !== 1 ||
+    typeof alias.attemptId !== "string" ||
+    !/^[a-f0-9]{64}$/.test(alias.attemptId)
+  ) {
+    throw new RecoveryStoreCorruptError();
+  }
+  const recordBytes = await store.load({
+    provider: "amc-checkout",
+    account: alias.attemptId,
+  });
+  if (recordBytes === null) return null;
+  let legacy: unknown;
+  try {
+    legacy = JSON.parse(Buffer.from(recordBytes).toString("utf8"));
+  } catch {
+    throw new RecoveryStoreCorruptError();
+  }
+  if (
+    !isRecord(legacy) ||
+    legacy.version !== 1 ||
+    legacy.orderToken !== orderToken ||
+    typeof legacy.state !== "string" ||
+    !isIso(legacy.updatedAt)
+  ) {
+    throw new RecoveryStoreCorruptError();
+  }
+  return {
+    orderToken,
+    intent: legacy.intent as CartCreateIntent,
+    state: legacy.state,
+    updatedAt: legacy.updatedAt,
+  };
+}
+
 function encode(value: unknown): Uint8Array {
   return Buffer.from(JSON.stringify(value), "utf8");
 }

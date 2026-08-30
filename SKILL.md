@@ -140,11 +140,15 @@ endpoint.
 
 - One cart per purchase. The self-checkout path consumes the existing
   `orderToken`; creating a second cart for the same seats is a bug.
-- Never strand a cart. The CLI journals cart tokens privately by default. If
-  `cart create` returns `AMC_CART_HOLD_UNCONFIRMED`, the hold EXISTS: read
-  `error.reconciliation.orderToken` and run
+- Never strand a cart. The CLI privately records each order token with its
+  original intent (plus a small uncertainty ledger); the AMC order projection
+  decides the rest. If `cart create` returns `AMC_CART_HOLD_UNCONFIRMED`, the
+  hold EXISTS: read `error.reconciliation.orderToken` and run
   `amc order release --token <orderToken>` (or `amc checkout reconcile`) — never
-  create another cart for the same seats.
+  create another cart for the same seats. After an ambiguous checkout submit,
+  `amc checkout reconcile` returns the confirmed purchase, a typed
+  settling/unknown result while it is still settling (never a false
+  "not purchased"), or no purchase with the cart still open for release.
 - No payment without the human approving the exact total shown by
   `checkout preview`. `buy --confirm` is retired and fails closed.
 - Never blind-retry any write; reconcile instead.

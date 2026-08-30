@@ -5,15 +5,17 @@
 // filesystem store, explicitly.
 
 export {
-  FileCheckoutJournal,
-  CheckoutJournalCorruptError,
-} from "../commerce/checkout-journal";
+  CartIntentStore,
+  RecoveryStoreCorruptError,
+} from "../commerce/cart-intent-store";
+export type { CartIntentRecord } from "../commerce/cart-intent-store";
+export { PendingWriteStore } from "../commerce/pending-write-store";
 export type {
-  CheckoutJournal,
-  CheckoutAttempt,
-  CheckoutAttemptState,
-  RefundAttempt,
-} from "../commerce/checkout-journal";
+  PendingWrite,
+  PendingWriteOperation,
+} from "../commerce/pending-write-store";
+export { createFileCheckoutRecovery } from "../commerce/wiring";
+export type { CheckoutRecovery } from "../commerce/service";
 
 // Durable and in-memory SessionStore implementations usable as the journal's
 // backing store. MemorySessionStore is intended for tests/ephemeral processes.

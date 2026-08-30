@@ -314,7 +314,7 @@ reconciliation context (order token, order number, showtime, seat names, line
 numbers) — never card, session, or device material. Writes are never blindly
 retried.
 
-`orders.release` is likewise stateless and needs no journal: it dispatches
+`orders.release` is likewise stateless when no recovery is wired: it dispatches
 OrderDelete at most once and, on an ambiguous response, performs a bounded
 authoritative read of the order's state, returning released only when the
 provider proves it cancelled/expired and otherwise throwing a typed
@@ -366,16 +366,25 @@ Add `--json` to any non-help command invocation for machine-readable output
 
 ### Cart recovery (durable by default in the CLI)
 
-The `amc` CLI journals every cart attempt to a private file under the same
-session store, so a cart hold whose provider order token was received can never
-be stranded — even across separate CLI processes. A capability module's
-`recovery` journal overrides this default; the library `createAmcClient()`
-stays stateless unless you opt in. If `cart create` fails after the provider
-returned a token (the hold exists but its details could not be confirmed), the
-error is `AMC_CART_HOLD_UNCONFIRMED` with
+The `amc` CLI keeps two tiny durable stores under the same session store: an
+**immutable cart-intent store** (the order token → original intent, written the
+instant a token is received) and an **uncertainty ledger** (one marker per
+outstanding write). There is no lifecycle state machine — the AMC order
+projection is the sole source of truth for what a cart/order currently is, and
+these stores only carry identity and outstanding uncertainty. This is what lets
+a cart hold whose token was received survive across separate CLI processes. A
+capability module's `recovery` bundle overrides the default; the library
+`createAmcClient()` stays stateless unless you opt in. If `cart create` fails
+after the provider returned a token (the hold exists but its details could not
+be confirmed), the error is `AMC_CART_HOLD_UNCONFIRMED` with
 `reconciliation.orderToken` — release it with
 `amc order release --token <orderToken>` (or `amc checkout reconcile`); never
-create another cart. `amc doctor` reports whether recovery is available.
+create another cart. After an ambiguous fulfillment, `amc checkout reconcile`
+returns the confirmed purchase once the provider shows it, reports a typed
+settling/unknown outcome while the bounded settle window is still open (never a
+misleading "not purchased"), and otherwise reports no purchase while the cart
+stays open for release or resubmit. `amc doctor` reports whether recovery is
+available.
 
 ### Session storage and session repair
 

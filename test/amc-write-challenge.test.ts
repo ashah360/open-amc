@@ -20,6 +20,7 @@ import {
   AmbiguousWriteError,
   CartCreateIntent,
   CartSnapshot,
+  OrderLifecycle,
   PurchaseResult,
   RefundOrderSnapshot,
   WriteChallengedError,
@@ -294,6 +295,9 @@ class CountingProjectionProvider implements AmcCommerceProjectionProvider {
       expiresAt: "2099-08-15T09:45:00.000Z",
       status: "OPEN",
     });
+  }
+  async projectLifecycle(): Promise<OrderLifecycle> {
+    return { kind: "open", cart: await this.inspectCart() };
   }
   reconcileCart(_intent: CartCreateIntent): Promise<CartSnapshot | null> {
     this.reconcileCalls += 1;

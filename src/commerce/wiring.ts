@@ -30,8 +30,24 @@ import {
   ScopedAmcGraphqlClient,
 } from "./graphql-executor";
 import { AmcGraphqlOrderProjectionProvider } from "./graphql-order-projection";
-import { CheckoutJournal } from "./checkout-journal";
-import { AmcCommerceService } from "./service";
+import { CartIntentStore } from "./cart-intent-store";
+import { PendingWriteStore } from "./pending-write-store";
+import { AmcCommerceService, CheckoutRecovery } from "./service";
+
+/**
+ * Build the default durable recovery bundle (immutable cart-intent store +
+ * uncertainty ledger) over an atomic SessionStore. This is what the CLI wires
+ * by default so token-first checkout works across processes.
+ */
+export function createFileCheckoutRecovery(
+  store: SessionStore,
+): CheckoutRecovery {
+  return {
+    intents: new CartIntentStore(store),
+    pending: new PendingWriteStore(store),
+    store,
+  };
+}
 
 /**
  * Explicit, non-ambient checkout capabilities. Nothing here is defaulted to a
@@ -46,8 +62,8 @@ export interface AmcCheckoutCapabilities {
   cardProvider?: SecretCardProvider;
   /** Interactive browser payment/3DS handler for the challenge path. */
   challengeHandler?: PaymentExecutor;
-  /** Optional durable operation store for cross-process crash recovery. */
-  recovery?: CheckoutJournal;
+  /** Optional durable recovery bundle for cross-process crash recovery. */
+  recovery?: CheckoutRecovery;
   /** Advanced overrides for the fraud/risk seams. */
   deviceData?: DeviceDataProvider;
   kount?: KountSessionProvider;
@@ -120,11 +136,12 @@ export function buildAmcCheckoutService(
 
   const service = new AmcCommerceService({
     executor,
+    projections,
     payment,
     ...(capabilities.challengeHandler
       ? { challengePayment: capabilities.challengeHandler }
       : {}),
-    ...(capabilities.recovery ? { journal: capabilities.recovery } : {}),
+    ...(capabilities.recovery ? { recovery: capabilities.recovery } : {}),
     ...(options.now ? { now: options.now } : {}),
   });
 
@@ -132,7 +149,7 @@ export function buildAmcCheckoutService(
     service,
     reconcile: {
       checkout: (orderToken, email) =>
-        graphPayment.reconcilePurchase(orderToken, email),
+        service.reconcileCheckoutByToken(orderToken, email),
       refund: (orderNumber, email) => executor.searchOrder(orderNumber, email),
     },
   };

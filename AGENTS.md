@@ -52,12 +52,18 @@ amc doctor --json
   auto-retried. A complete **5xx**, however, is NOT proof of non-execution (the
   origin may have mutated then failed): it stays `AMC_WRITE_OUTCOME_UNKNOWN`
   (reconcile-only), exactly like a transport error with no complete response.
-- **A cart hold is never stranded.** The CLI journals cart tokens privately by
-  default (no config needed). If `cart create` fails after the provider issued a
-  token, the error is `AMC_CART_HOLD_UNCONFIRMED` with
-  `reconciliation.orderToken` — the cart EXISTS. Release it with
+- **A cart hold is never stranded.** The CLI keeps a private immutable
+  cart-intent store (order token → original intent) plus a small uncertainty
+  ledger (one marker per outstanding write); there is no lifecycle state
+  machine — the AMC order projection is the sole truth. If `cart create` fails
+  after the provider issued a token, the error is `AMC_CART_HOLD_UNCONFIRMED`
+  with `reconciliation.orderToken` — the cart EXISTS. Release it with
   `amc order release --token <orderToken>` (or reconcile); do **not** create
-  another cart.
+  another cart. After an ambiguous fulfillment, `amc checkout reconcile`
+  returns the confirmed purchase once the provider shows it, reports a typed
+  settling/unknown outcome while the bounded settle window is still open (never
+  a misleading "not purchased"), and otherwise reports no purchase while the
+  cart stays open for release or resubmit.
 - **Stop on 3DS / user-action-required.** Interactive payment challenges are a
   human boundary; report and stop.
 - The `checkoutUrl` returned by `cart create` is **bearer-like**: anyone

@@ -15,8 +15,10 @@ import {
   resolveOfficialAmcTheaterUrl,
 } from "./client/theater-url";
 import { createPurchaseSnapshot } from "./commerce/purchase-snapshot";
-import { AmcCheckoutCapabilities } from "./commerce/wiring";
-import { FileCheckoutJournal } from "./commerce/checkout-journal";
+import {
+  AmcCheckoutCapabilities,
+  createFileCheckoutRecovery,
+} from "./commerce/wiring";
 import {
   CheckoutPreview,
   RefundPreview,
@@ -1168,12 +1170,12 @@ async function buildClient(
     ...(capabilities.challengeHandler
       ? { challengeHandler: capabilities.challengeHandler }
       : {}),
-    // The CLI ALWAYS has a durable cart journal so a cart hold whose token was
+    // The CLI ALWAYS has durable recovery so a cart hold whose token was
     // received can never be stranded across processes: a capability-supplied
-    // recovery journal wins, otherwise a private FileCheckoutJournal backed by
-    // the same mode-0600 session store is used by default. (The library
-    // `createAmcClient()` stays stateless unless a caller opts in.)
-    recovery: capabilities.recovery ?? new FileCheckoutJournal(store),
+    // recovery bundle wins, otherwise a private one (immutable cart-intent
+    // store + uncertainty ledger) backed by the same mode-0600 session store is
+    // used by default. (The library `createAmcClient()` stays stateless.)
+    recovery: capabilities.recovery ?? createFileCheckoutRecovery(store),
   };
   const client = factory({
     transport,

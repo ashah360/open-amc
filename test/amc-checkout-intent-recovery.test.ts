@@ -7,11 +7,11 @@ import { FileSessionStore } from "../src/auth-session";
 import { RequestInput, ResponseOutput, Transport } from "../src/transport";
 import { AMC_SESSION_KEY, AmcRuntime } from "../src/client/runtime";
 import { AmcSession, encodeAmcSession } from "../src/client/session";
-import { buildAmcCheckoutService } from "../src/commerce/wiring";
 import {
-  CheckoutJournalCorruptError,
-  FileCheckoutJournal,
-} from "../src/commerce/checkout-journal";
+  buildAmcCheckoutService,
+  createFileCheckoutRecovery,
+} from "../src/commerce/wiring";
+import { RecoveryStoreCorruptError } from "../src/commerce/cart-intent-store";
 import {
   CartIntentUnavailableError,
   CartNotResumableError,
@@ -90,15 +90,22 @@ describe("durable cross-process cart-intent recovery", () => {
     );
   });
 
-  it("fails closed when the order-token alias is tampered", async () => {
+  it("fails closed when the cart-intent record is tampered", async () => {
     const ctx = await sharedContext();
     await ctx.buildProcess().service.createCart(intent());
 
-    // Corrupt the order-token alias so it points at a non-existent attempt.
+    // Corrupt the immutable intent record so its stored token no longer matches
+    // the token its key hashes from.
     await ctx.store.save(
-      { provider: "amc-checkout-order", account: sha256(ORDER_TOKEN) },
+      { provider: "amc-cart-intent", account: sha256(ORDER_TOKEN) },
       Buffer.from(
-        JSON.stringify({ version: 1, attemptId: "f".repeat(64) }),
+        JSON.stringify({
+          version: 2,
+          orderToken: "different-token",
+          intent: intent(),
+          intentHash: "f".repeat(64),
+          createdAt: "2030-01-15T08:00:00.000Z",
+        }),
         "utf8",
       ),
     );
@@ -110,24 +117,16 @@ describe("durable cross-process cart-intent recovery", () => {
         email: "guest@example.test",
       })
       .catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(CheckoutJournalCorruptError);
+    expect(error).toBeInstanceOf(RecoveryStoreCorruptError);
   });
 
-  it("fails closed when the journaled attempt is not an open cart (released)", async () => {
+  it("fails closed when the provider says the order is not an open cart (purchased)", async () => {
     const ctx = await sharedContext();
     await ctx.buildProcess().service.createCart(intent());
 
-    // Move the attempt to RELEASED (its order alias still resolves it).
-    const journal = new FileCheckoutJournal(ctx.store);
-    const attempt = await journal.loadByOrderToken(ORDER_TOKEN);
-    await journal.save({
-      ...attempt!,
-      state: "RELEASED",
-      updatedAt: new Date().toISOString(),
-    });
-
+    // A fresh process where the provider now projects the order as purchased.
     const error = await ctx
-      .buildProcess()
+      .buildProcess({ projection: "purchased" })
       .service.previewCheckout({
         orderToken: ORDER_TOKEN,
         email: "guest@example.test",
@@ -153,6 +152,7 @@ interface SharedContext {
   buildProcess(options?: {
     withPayment?: boolean;
     withJournal?: boolean;
+    projection?: "open" | "purchased";
   }): BuiltProcess;
 }
 
@@ -171,28 +171,35 @@ async function sharedContext(): Promise<SharedContext> {
   await store.save(AMC_SESSION_KEY, encodeAmcSession(session()));
 
   const buildProcess = (
-    options: { withPayment?: boolean; withJournal?: boolean } = {},
+    options: {
+      withPayment?: boolean;
+      withJournal?: boolean;
+      projection?: "open" | "purchased";
+    } = {},
   ): BuiltProcess => {
-    const transport = new OperationTransport(options.withPayment ?? false);
+    const transport = new OperationTransport(
+      options.withPayment ?? false,
+      options.projection ?? "open",
+    );
     const runtime = new AmcRuntime({
       transport,
       store,
       readMode: "graphql",
       listingUrl: LISTING_URL,
     });
-    const journal =
+    const recovery =
       options.withJournal === false
         ? undefined
-        : new FileCheckoutJournal(store);
+        : createFileCheckoutRecovery(store);
     const built = buildAmcCheckoutService({
       transport,
       store,
       runtime,
-      ...(journal ? { capabilities: { recovery: journal } } : {}),
+      ...(recovery ? { capabilities: { recovery } } : {}),
       ...(options.withPayment
         ? {
             capabilities: {
-              ...(journal ? { recovery: journal } : {}),
+              ...(recovery ? { recovery } : {}),
               cardProvider: new FakeCardProvider(),
               deviceData: new FakeDeviceData(),
               riskHttp: new FakeRiskHttp(),
@@ -215,7 +222,10 @@ class OperationTransport implements Transport {
   readonly sent: RequestInput[] = [];
   cartCreates = 0;
   private fulfilled = false;
-  constructor(private readonly withPayment: boolean) {}
+  constructor(
+    private readonly withPayment: boolean,
+    private readonly projection: "open" | "purchased" = "open",
+  ) {}
   async request(input: RequestInput): Promise<ResponseOutput> {
     this.sent.push(input);
     const op = operationOf(input);
@@ -229,11 +239,12 @@ class OperationTransport implements Transport {
       });
     }
     if (op === "OrderProjection") {
-      // Once fulfilled, the same token projects a confirmed purchase so the
-      // post-fulfill projection/reconcile succeeds; before that it is an open
-      // pending cart.
+      // Once fulfilled (or in explicit "purchased" mode), the same token
+      // projects a confirmed purchase; otherwise it is an open pending cart.
       return graphJson(
-        this.fulfilled ? confirmedOrderProjection() : pendingOrderProjection(),
+        this.fulfilled || this.projection === "purchased"
+          ? confirmedOrderProjection()
+          : pendingOrderProjection(),
       );
     }
     if (op === "BraintreeAuthorization" && this.withPayment) {
